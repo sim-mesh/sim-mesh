@@ -444,6 +444,50 @@ uint8_t syncWordOf(const ChipState& d)
     return (uint8_t)((m & 0xF0) | ((l & 0xF0) >> 4));
 }
 
+/* SIM_MESH_MULTI_SF: the station's radio has an LR2021's side detectors. Set
+ * (and not "0"), its receiver hears the faster spreading factors below its
+ * own on the same bandwidth, as that chip's multi-SF receive does: the same
+ * air, one demodulator, the frame at whichever SF it came. An SX1262 has no
+ * such thing, so it is off unless a station asks; it stands in for the
+ * LR2021, which sim-mesh does not model, where firmware is to be judged
+ * against it. */
+static bool multiSfReceiver()
+{
+    static const bool on = [] {
+        const char* v = getenv("SIM_MESH_MULTI_SF");
+        return v && *v && strcmp(v, "0") != 0;
+    }();
+    return on;
+}
+
+/* The spreading factors an LR2021 listens for at `sf` and `bwHz` (its
+ * datasheet, §9.3 and §9.9.6): `sf` and the faster ones below it, down to
+ * SF5, as many as the chip allows. Four at most, all within 4 of each other;
+ * two side detectors above 500 kHz and one where the main SF is 10 to 12; the
+ * sum of their detection factors times the bandwidth under 32e6. The faster
+ * ones go first where something has to give, so `sf` is always among them.
+ * Ascending; returns the count. */
+static int multiSfSet(int sf, uint32_t bwHz, int out[4])
+{
+    static const uint64_t kDetectionFactor[8] = {10, 10, 12, 12, 14, 14, 16, 16};
+    if (sf < 5 || sf > 12) {
+        out[0] = sf;
+        return 1;
+    }
+    int lo = sf - 3 < 5 ? 5 : sf - 3;
+    for (; lo < sf; lo++) {
+        int sides = sf - lo;
+        uint64_t factors = 0;
+        for (int s = lo; s <= sf; s++) factors += kDetectionFactor[s - 5];
+        if ((bwHz <= 500000 || sides <= 2) && (lo < 10 || sides <= 1)
+                && factors * (uint64_t)bwHz < 32000000ULL)
+            break;
+    }
+    int n = 0;
+    for (int s = lo; s <= sf; s++) out[n++] = s;
+    return n;
+}
+
 void fillState(const simradio* c, EtherState& s)
 {
     const ChipState& d = c->st;
@@ -458,6 +502,7 @@ void fillState(const simradio* c, EtherState& s)
     s.hdrImplicit = d.hdrImplicit;
     s.crc         = d.crcOn;
     s.preamble    = d.preamble;
+    s.sfCount     = multiSfReceiver() ? multiSfSet(d.sf, d.bwHz, s.sfs) : 0;
 }
 
 void setMode(ChipState& d, const char* mode, uint8_t bits)

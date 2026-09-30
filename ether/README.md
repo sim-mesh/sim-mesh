@@ -57,6 +57,15 @@ step to −20 dB at SF12. So SF12 reaches 17.5 dB further than SF7 and pays for
 it in air time. A frame under that threshold is not delivered at all: that is
 what "out of range" means here.
 
+**A multi-SF receiver** hears more than one spreading factor: its `state`
+lists them, `"sfs": [5, 6, 7]`, its own among them, and it can decode a frame
+at any of them. The chip model says so when its station's environment has
+`SIM_MESH_MULTI_SF`: an LR2021's side detectors, which listen for the faster
+SFs below the chip's own on its bandwidth, by that chip's rule. It still has
+one demodulator, so a frame at any of those SFs locks it as one at its own SF
+would, and everything else is as for any receiver. No state lists `sfs`
+unless a station asks, so a run without it is as it was.
+
 **The receiver locks on at the preamble.** A decodable frame takes the
 receiver when it is not demodulating another, or when it leads the one in
 progress by the same-SF figure, 6 dB — and then the earlier one is lost
