@@ -9,6 +9,7 @@ import collections
 import datetime
 import json
 import os
+import socket
 import sys
 
 import pytest
@@ -272,69 +273,81 @@ def test_frames_alike_at_one_instant_take_the_numbers_the_barrier_gave_them(run,
     assert [(u["sid"], u["frames"]) for u in report["unheard"]] == [(1, 1)]
 
 
-class Wire:
-    """The ether's socket, as far as the ether can tell: what it sends is
-    kept, by the station it went to."""
-
-    def __init__(self):
-        self.sent = []
-
-    def sendto(self, data, addr):
-        self.sent.append((addr[1], json.loads(data)))
-
-    def close(self):
-        pass
-
-
 def written_by_the_ether(path, medium):
     """A record the ether itself writes, in virtual time, on the run's tables:
     all four send at 1 s, alike; three at 2 s, two of them alike, and n03
     over them; n01 and n04 alike at 3 s, and n02, told of n01's frame,
     answers at once, a second batch at the same T. The ether's own
-    numbering comes back: number -> (sender, start)."""
+    numbering comes back: number -> (sender, start).
+
+    The ether is a run's, its conductor the core, and the four stations are
+    sockets here that answer as the plan says. The run is over when every
+    station is idle and nothing is due: nothing then can move T."""
+    if not os.path.exists(ether_module.CORE_PATH):
+        pytest.fail("no ether core built (sim-mesh build ether)")
     numbered = {}
     plan = {1: [(1000, 200), (2000, 200), (3000, 100)], 2: [(1000, 200), (2000, 150)],
             3: [(1000, 200), (2050, 200)], 4: [(1000, 200), (2000, 200), (3000, 100)]}
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        ether = ether_module.Ether(path, time_mode="max")
-        ether.transport = Wire()
-        ether.set_losses(medium.tables, {name: sid for sid, name in medium.names.items()})
-        ether.on_tx = lambda sid, eid, freq, start, end: numbered.setdefault(eid, (sid, start))
 
-        def say(sid, msg):
-            ether.datagram_received(json.dumps(dict(msg, sid=sid)).encode(), ("127.0.0.1", sid))
+    async def go():
+        loop = asyncio.get_running_loop()
+        _, ether = await ether_module.open_ether(("127.0.0.1", 0), path, time_mode="max")
+        at = ether.transport.get_extra_info("sockname")
+        socks = {}
+        try:
+            ether.set_losses(medium.tables, {name: sid for sid, name in medium.names.items()})
+            ether.on_tx = lambda sid, eid, freq, start, end: numbered.setdefault(eid, (sid, start))
+            for sid in plan:
+                socks[sid] = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                socks[sid].bind(("127.0.0.1", 0))
+                socks[sid].setblocking(False)
 
-        def send(sid, t, span_ms):
-            say(sid, {"type": "tx", "slot": 0, "id": 1, "freq": CALLING, "bw": 125000, "sf": 8,
-                      "sync": 18, "power_dbm": 14, "payload": "AAAA", "t0": t,
-                      "t_pre": t + 25088, "t_hdr": t + 41472, "t_end": t + span_ms * 1000})
+            def say(sid, msg):
+                socks[sid].sendto(json.dumps(dict(msg, sid=sid)).encode(), at)
 
-        for sid in plan:
-            ether.expect(sid)
-        for sid in plan:
-            say(sid, {"type": "hello", "slots": [0]})
-        answered = False
-        while ether.transport.sent:
-            sent, ether.transport.sent = ether.transport.sent, []
-            for sid, msg in sent:
-                t = msg["t"]
-                if msg["type"] == "welcome":
-                    say(sid, {"type": "state", "slot": 0, "mode": "RX", "freq": CALLING,
-                              "bw": 125000, "sf": 8, "sync": 18})
-                while plan[sid] and plan[sid][0][0] * 1000 <= t:
-                    send(sid, t, plan[sid].pop(0)[1])
-                if (sid == 2 and t == 3_000_000 and msg["type"] == "rx_begin"
-                        and not msg.get("cad") and not answered):
-                    answered = True
-                    send(sid, t, 100)
-                say(sid, {"type": "idle", "seq": msg["seq"],
-                          "until": plan[sid][0][0] * 1000 if plan[sid] else None})
-        ether.close()
-    finally:
-        loop.close()
-        asyncio.set_event_loop(None)
+            def send(sid, t, span_ms):
+                say(sid, {"type": "tx", "slot": 0, "id": 1, "freq": CALLING, "bw": 125000,
+                          "sf": 8, "sync": 18, "power_dbm": 14, "payload": "AAAA", "t0": t,
+                          "t_pre": t + 25088, "t_hdr": t + 41472, "t_end": t + span_ms * 1000})
+
+            for sid in plan:
+                ether.expect(sid)
+            for sid in plan:
+                say(sid, {"type": "hello", "slots": [0]})
+            answered = False
+            give_up = loop.time() + 20.0
+            while True:
+                heard = False
+                for sid, sock in socks.items():
+                    try:
+                        msg = json.loads(sock.recv(65535))
+                    except BlockingIOError:
+                        continue
+                    heard = True
+                    t = msg["t"]
+                    if msg["type"] == "welcome":
+                        say(sid, {"type": "state", "slot": 0, "mode": "RX", "freq": CALLING,
+                                  "bw": 125000, "sf": 8, "sync": 18})
+                    while plan[sid] and plan[sid][0][0] * 1000 <= t:
+                        send(sid, t, plan[sid].pop(0)[1])
+                    if (sid == 2 and t == 3_000_000 and msg["type"] == "rx_begin"
+                            and not msg.get("cad") and not answered):
+                        answered = True
+                        send(sid, t, 100)
+                    say(sid, {"type": "idle", "seq": msg["seq"],
+                              "until": plan[sid][0][0] * 1000 if plan[sid] else None})
+                if heard:
+                    continue
+                if not ether.busy() and ether.core.next_instant() is None:
+                    break
+                assert loop.time() < give_up, "the run did not come to rest"
+                await asyncio.sleep(0.002)
+        finally:
+            for sock in socks.values():
+                sock.close()
+            ether.close()
+
+    asyncio.run(go())
     return numbered
 
 

@@ -332,10 +332,11 @@ ether`, into `build/`), in the event loop's thread, on the ether's socket:
 T, the stations' numbering and idles, the resend buffer, the barrier itself,
 and whether the stations that just ran printed anything. Everything else —
 the medium, the ether's timers, hello, the channels, the testbed's holds —
-stays in `ether.py`, called at the same points as before, so the run is the
-same: `Ether`'s own conductor is the reference, and the two give the same
-record. `SIM_MESH_ETHER_CORE=python` runs `Ether`'s, `rust` the core (an error
-when it is not built); unset, the core runs when it is built.
+stays in `ether.py`, which the core calls at the barrier's points. The core
+is the only conductor: `Ether` had one of its own in Python, and the core
+gave its record line for line until that one was retired. A virtual-time
+run without the core built is refused, saying to build it; a real-time run
+needs no conductor.
 
 A station that stays busy cannot stop T for good: its own side reports idle
 after 20 ms of wall time with nothing to show for it (the busy watchdog in

@@ -275,17 +275,21 @@ def pairwise(tmp_path):
         bed.close()
 
 
-# The conductors a virtual-time run can have: Ether's own, and ether_core's
-# when it is built (`sim-mesh build ether`); every virtual-time test runs on each.
+# A virtual-time run's conductor is ether_core (`sim-mesh build ether`), and
+# every virtual-time test needs it: without it they fail saying so, rather than
+# skip and look like a suite that passed.
 CORE_BUILT = os.path.exists(ether_module.CORE_PATH)
-CONDUCTORS = ["python", pytest.param("rust", marks=pytest.mark.skipif(
-    not CORE_BUILT, reason="no ether core built (sim-mesh build ether)"))]
 
 
-@pytest.fixture(params=CONDUCTORS)
-def conductor(tmp_path, request, monkeypatch):
+def need_core():
+    if not CORE_BUILT:
+        pytest.fail("no ether core built (sim-mesh build ether)")
+
+
+@pytest.fixture
+def conductor(tmp_path):
     """The ether in virtual time, as fast as its stations let it go."""
-    monkeypatch.setenv("SIM_MESH_ETHER_CORE", request.param)
+    need_core()
     bed = Bench(tmp_path, "max")
     try:
         yield bed
@@ -1710,27 +1714,20 @@ class InProcess:
         self.ether.close()
 
 
-def in_process(test, conductors=None):
-    """Run `test` on an in-process ether, once for each conductor built (or
-    each of `conductors`)."""
-    for conductor in conductors or (("python", "rust") if CORE_BUILT else ("python",)):
-        before = os.environ.get("SIM_MESH_ETHER_CORE")
-        os.environ["SIM_MESH_ETHER_CORE"] = conductor
-        loop = asyncio.new_event_loop()
+def in_process(test):
+    """Run `test` on an in-process ether in virtual time."""
+    need_core()
+    loop = asyncio.new_event_loop()
+    try:
+        bed = InProcess(loop)
+        loop.run_until_complete(bed.start())
+        assert isinstance(bed.ether, ether_module.CoreEther)
         try:
-            bed = InProcess(loop)
-            loop.run_until_complete(bed.start())
-            assert isinstance(bed.ether, ether_module.CoreEther) == (conductor == "rust")
-            try:
-                loop.run_until_complete(test(bed))
-            finally:
-                bed.close()
+            loop.run_until_complete(test(bed))
         finally:
-            loop.close()
-            if before is None:
-                os.environ.pop("SIM_MESH_ETHER_CORE", None)
-            else:
-                os.environ["SIM_MESH_ETHER_CORE"] = before
+            bed.close()
+    finally:
+        loop.close()
 
 
 def test_a_station_that_takes_lines_is_told_an_instant_in_one_datagram():
@@ -1925,8 +1922,8 @@ def test_t_does_not_wait_on_a_drain_that_found_nothing_printed():
 def test_a_watched_console_holds_t_only_once_it_has_printed():
     """With drains_watched, on_drain answers exactly whether a watched
     console shows something: T goes on at once past a station that printed
-    nothing, and waits for the read of one that did. A core looks at the
-    console itself and asks only then; Ether's own conductor asks each time."""
+    nothing, and waits for the read of one that did. The core looks at the
+    console itself and asks only then."""
     async def test(bed):
         ether = bed.ether
         r, w = os.pipe()
@@ -1962,10 +1959,7 @@ def test_a_watched_console_holds_t_only_once_it_has_printed():
             assert asked[-1] == ([1], 500_000)
             await asyncio.sleep(0.1)
             assert ether.now() == 1_000_000         # read, and T went on
-            if isinstance(ether, ether_module.CoreEther):
-                assert asked == [([1], 500_000)]    # never asked about nothing
-            else:
-                assert asked == [([1], 0), ([1], 500_000)]
+            assert asked == [([1], 500_000)]        # never asked about nothing
         finally:
             ether.unwatch(1, marks)
             os.close(r)
@@ -1974,7 +1968,6 @@ def test_a_watched_console_holds_t_only_once_it_has_printed():
     in_process(test)
 
 
-@pytest.mark.skipif(not CORE_BUILT, reason="no ether core built (sim-mesh build ether)")
 def test_a_burst_the_kernel_could_not_hold_is_heard_whole_by_the_core():
     """The core's reader thread takes datagrams off the socket as they come,
     whatever the loop's thread is doing: a burst far past the kernel's receive
@@ -2001,10 +1994,9 @@ def test_a_burst_the_kernel_could_not_hold_is_heard_whole_by_the_core():
             for s in socks:
                 s.close()
 
-    in_process(test, conductors=("rust",))
+    in_process(test)
 
 
-@pytest.mark.skipif(not CORE_BUILT, reason="no ether core built (sim-mesh build ether)")
 def test_datagrams_that_come_while_the_core_is_handling_others_are_all_heard():
     """Datagrams keep coming from another thread while the loop handles the
     ones before them: every one is heard, none left queued with nothing to
@@ -2032,10 +2024,9 @@ def test_datagrams_that_come_while_the_core_is_handling_others_are_all_heard():
         sender.join()
         assert len(ether.stations) == 3000
 
-    in_process(test, conductors=("rust",))
+    in_process(test)
 
 
-@pytest.mark.skipif(not CORE_BUILT, reason="no ether core built (sim-mesh build ether)")
 def test_the_core_counts_what_the_kernel_dropped_on_its_socket():
     """Datagrams the kernel could not hold before anyone read them are
     counted, from what it says with the next one (SO_RXQ_OVFL), and simd
@@ -2064,15 +2055,8 @@ def test_the_core_counts_what_the_kernel_dropped_on_its_socket():
         finally:
             sender.close()
 
-    before = os.environ.get("SIM_MESH_ETHER_CORE")
-    os.environ["SIM_MESH_ETHER_CORE"] = "rust"
-    try:
-        asyncio.run(test())
-    finally:
-        if before is None:
-            os.environ.pop("SIM_MESH_ETHER_CORE", None)
-        else:
-            os.environ["SIM_MESH_ETHER_CORE"] = before
+    need_core()
+    asyncio.run(test())
 
 
 def test_what_stations_printed_is_read_before_t_moves():

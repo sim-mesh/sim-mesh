@@ -266,8 +266,8 @@ build_radio() {
 }
 
 # The ether's conductor in Rust (ether/core), a Python extension module the
-# ether loads from ether/build/; without it the ether's own conductor, in
-# Python, runs a virtual-time run, and gives the same run.
+# ether loads from ether/build/: a virtual-time run is refused without it, and
+# a real-time one needs none.
 build_ether() {
     command -v cargo >/dev/null || die "the ether's conductor needs cargo"
     say "the ether's conductor: ether_core (cargo build --release)"
@@ -338,7 +338,7 @@ cmd_front() {
     py=$(pick_python)
     ! radio_stale || build_radio
     ! ether_stale || { command -v cargo >/dev/null && build_ether; } \
-        || say "the ether's conductor in Rust is not built; its Python one runs"
+        || say "the ether's conductor is not built: real time runs, virtual time is refused"
     # The planner first: its wasm lands in the page's vendor/, which the page
     # then builds from.
     ! planner_stale || (build_planner) \

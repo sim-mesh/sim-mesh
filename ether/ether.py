@@ -310,9 +310,6 @@ class VirtualClock:
         self.count += 1
         heapq.heappush(self.heap, (int(t_us), key, self.count, callback, args))
 
-    def next_due(self):
-        return self.heap[0][0] if self.heap else None
-
     def pop_due(self):
         """The next event at or before T, or None."""
         if self.heap and self.heap[0][0] <= self.t:
@@ -486,10 +483,12 @@ class Station:
         self.init_conductor(addr)
 
     def init_conductor(self, addr):
-        """The conductor's view of it, in a virtual-time run: where it last
-        wrote from, the last sequence number sent to it, whether it has said
+        """Where it last wrote from, and the conductor's view of it that the
+        ether reads: the last sequence number sent to it, whether it has said
         it is idle since, and the conductor time it next needs to run at
-        (None: never, on its own). A CoreStation keeps these in the core."""
+        (None: never, on its own). In a virtual-time run every station is a
+        CoreStation, whose view is the core's; a real-time run has no
+        conductor, and these stay as they start."""
         self.addr = addr
         self.seq = 0
         self.idle = False
@@ -497,15 +496,8 @@ class Station:
         self.told = 0           # the T it was last sent, which is the T it has
         self.asking = 0         # TCP writes it is waiting to be let make
         self.asked_at = 0       # its seq when it last asked
-        self.standing = 0       # idles in a row that asked for T itself
-        self.granted_at = 0.0   # the wall clock when it was last told anything
-        self.idle_said = None   # (seq, until) of the idle last taken from it
-        self.unanswered = []    # (seq, datagram) sent since its last idle, for a resend
-        self.resent_at = 0.0    # the wall clock of the last resend to it
-        self.stale_said = None  # the number of the last idle it said for an older message
         self.slow_idles = 0     # idles that took the busy watchdog's time or more
         self.lines = False      # takes several messages to a datagram (its hello)
-        self.outbox = []        # the barrier's messages to it at this instant
 
     def state(self, slot):
         return self.states.get(slot)
@@ -639,6 +631,9 @@ class Ether(asyncio.DatagramProtocol):
         self.transport = None
         self.loop = asyncio.get_event_loop()
         self.mode, self.rate = parse_time_mode(time_mode)
+        if self.mode == "virtual" and type(self) is Ether:
+            raise ValueError("a virtual-time run is conducted by ether_core: open_ether() "
+                             "makes its ether (sim-mesh build ether)")
         self.clock = VirtualClock() if self.mode == "virtual" else RealClock(self.loop)
         # The wall-clock microseconds T = 0 stands for, so every station's
         # time() agrees with every other's. A virtual run may be given one,
@@ -648,8 +643,6 @@ class Ether(asyncio.DatagramProtocol):
         if epoch is not None and self.mode == "virtual":
             self.epoch = int(epoch)
         self.expected = set()       # stations started and not yet heard from
-        self.busy_count = 0         # stations not idle since they were last told anything
-        self.pending = []           # (sid, arrival, addr, msg) held for the barrier
         self.holds = 0              # the testbed's own work in hand at the T it has
         self.floors = {}            # sid -> "tool" | "station": a testbed tool's session with it
         self.joins = {}             # sid -> future, done at its hello (expect)
@@ -660,13 +653,10 @@ class Ether(asyncio.DatagramProtocol):
         self.unread = 0             # channels holding T
         self.endpoints = {}         # "addr:port" -> the station a TCP endpoint is
         self.asks = []              # (sid, arrival, channel, n, reply, addr): writes waiting
-        self.dirty = set()          # stations that have run since their output was read
         self.on_drain = None        # (sids, done): read what they printed, then done();
                                     # or False, done not called: none of them printed
         self.drains_watched = False     # on_drain is stations.printed over the watched consoles
         self.arrivals = 0
-        self.advancing = False
-        self.outboxed = []          # stations with messages waiting for the barrier to stop
         self.pace_timer = None
         self.pace_origin = None     # (wall seconds, T) a paced run is measured from
         self.barriers = 0           # times T has moved
@@ -811,6 +801,12 @@ class Ether(asyncio.DatagramProtocol):
             callback()
 
     # ---- the conductor --------------------------------------------------
+    #
+    # In a virtual-time run the barrier is ether_core's (CoreEther below):
+    # T, the stations' numbering and idles, the resends, and when T may move.
+    # What stays here is the ether's side of a station starting, joining and
+    # leaving, and what the core calls back into at the barrier: `paced`,
+    # `run_due` and `take_held`.
 
     def expect(self, sid):
         """A station is starting: T waits for it to say hello and then idle.
@@ -847,27 +843,12 @@ class Ether(asyncio.DatagramProtocol):
         station = self.stations.pop(sid, None)
         if station is None:
             return False
-        if not station.idle:
-            self.busy_count -= 1
-        self.pending = [p for p in self.pending if p[0] != sid]
         self.asks = [a for a in self.asks if a[0] != sid]
         for key, channel in list(self.channels.items()):
             if sid in (channel.writer, channel.reader):
                 self.drop_channel(channel)
         self.endpoints = {e: s for e, s in self.endpoints.items() if s != sid}
         return True
-
-    def mark(self, station, idle):
-        """Whether a station has said it is idle since it was last told anything."""
-        if station.idle != idle:
-            station.idle = idle
-            self.busy_count += -1 if idle else 1
-
-    def busy(self):
-        """True while T must wait: a station started and not yet idle, input
-        a reader has not taken, or the testbed's own work at this instant."""
-        return (bool(self.expected) or self.busy_count > 0 or self.unread > 0
-                or self.holds > 0)
 
     def waiting_on(self):
         """The stations T is waiting for: started and unheard, not idle, or
@@ -878,50 +859,9 @@ class Ether(asyncio.DatagramProtocol):
         return sorted(self.expected) + sorted(
             sid for sid, st in self.stations.items() if not st.idle or sid in unread)
 
-    def next_instant(self):
-        """Where T goes next: the earliest a station or the ether needs to run."""
-        candidates = [st.until for st in self.stations.values() if st.until is not None]
-        due = self.clock.next_due()
-        if due is not None:
-            candidates.append(due)
-        if not candidates:
-            return None
-        return max(self.clock.t, min(candidates))
-
     def kick(self):
-        """Move T as far as the barrier lets it, now."""
-        if not self.clock.virtual or self.advancing:
-            return
-        self.advancing = True
-        try:
-            while True:
-                if self.asks and self.quiet():
-                    self.answer_ask()
-                    continue
-                if self.busy():
-                    return
-                if self.pending:
-                    self.flush_pending()
-                    continue
-                if self.dirty and self.on_drain is not None:
-                    # What the stations printed at this T is read before T
-                    # moves: a reply the testbed acts on is acted on here.
-                    sids, self.dirty = sorted(self.dirty), set()
-                    self.holds += 1
-                    if self.on_drain(sids, self.drained) is False:
-                        # Nothing printed, so nothing to read and nothing set
-                        # going: T need not wait a turn of the loop for it.
-                        self.holds -= 1
-                    continue
-                t = self.next_instant()
-                if t is None:
-                    return
-                if not self.paced(t):
-                    return
-                self.step_to(t)
-        finally:
-            self.advancing = False
-            self.send_outboxes()
+        """Move T as far as the barrier lets it, now: CoreEther's. A real-time
+        run has no T to move."""
 
     def paced(self, t):
         """True when a paced run may move to `t` now; else a timer comes back."""
@@ -945,25 +885,6 @@ class Ether(asyncio.DatagramProtocol):
             self.pace_timer = self.loop.call_at(target, resume)
         return False
 
-    def step_to(self, t):
-        """T moves to `t`: what is due runs, and every station due is told."""
-        if t == self.clock.t:
-            self.standing += 1
-            if self.standing % 10000 == 0:
-                log("T has stood at %d for %d steps; due: %s" % (
-                    t, self.standing,
-                    ", ".join("%d" % sid for sid, st in sorted(self.stations.items())
-                              if st.until is not None and st.until <= t)))
-        else:
-            self.standing = 0
-        self.clock.t = t
-        self.barriers += 1
-        self.run_due()
-        for sid in sorted(self.stations):
-            st = self.stations[sid]
-            if st.idle and st.until is not None and st.until <= t:
-                self.send(sid, {"type": "run"})
-
     def run_due(self):
         """Everything on the ether's clock due at T, in its order."""
         while True:
@@ -972,12 +893,6 @@ class Ether(asyncio.DatagramProtocol):
                 break
             callback, args = due
             callback(*args)
-
-    def flush_pending(self):
-        """What stations said while T stood still, in station order."""
-        batch = sorted(self.pending, key=lambda p: (p[0], p[1]))
-        self.pending = []
-        self.take_held((sid, addr, msg) for sid, _, addr, msg in batch)
 
     def take_held(self, batch):
         """The medium takes what stations said while T stood still: `batch`,
@@ -998,73 +913,6 @@ class Ether(asyncio.DatagramProtocol):
                     self.recv_tx(sid, addr, msg)
             except Exception as err:            # noqa: BLE001 - see docstring
                 log("station %d's %s could not be taken, dropped: %r" % (sid, kind, err))
-
-    def recv_idle(self, sid, msg):
-        """A station idle after the message numbered `seq`.
-
-        UDP may lose a datagram either way, so a station says its idle again
-        while it hears nothing back. An idle for a number older than the last
-        one sent is usually only crossing that message on the wire; said a
-        second time, it says the station missed what came after it, which is
-        sent again as it was (`unanswered`). A second idle for what is
-        already known changes nothing."""
-        station = self.stations.get(sid)
-        seq = msg.get("seq")
-        if station is None or not isinstance(seq, int):
-            return
-        if seq < station.seq:
-            # Once is the ordinary race, an idle crossing the next message on
-            # the wire; the same number again means that message never came.
-            if station.stale_said == seq:
-                self.resend(station, seq)
-            station.stale_said = seq
-            return
-        station.stale_said = None
-        if seq != station.seq:
-            return
-        station.unanswered = []
-        until = msg.get("until")
-        until = int(until) if isinstance(until, (int, float)) else None
-        if station.idle and (seq, until) == station.idle_said:
-            return
-        station.idle_said = (seq, until)
-        if self.loop.time() - station.granted_at >= SLOW_IDLE_S:
-            station.slow_idles += 1
-        self.mark(station, True)
-        self.dirty.add(sid)
-        station.until = until
-        if station.until is not None and station.until <= self.clock.t:
-            # A station that keeps asking for the instant it already has is
-            # working in no time at all; work takes time, so after a while it
-            # is given the next tick's worth instead.
-            station.standing += 1
-            if station.standing > STANDING_LIMIT:
-                if station.standing == STANDING_LIMIT + 1:
-                    log("station %d asks for T %d again and again; giving it %d us"
-                        % (sid, self.clock.t, STANDING_QUANTUM_US))
-                station.until = self.clock.t + STANDING_QUANTUM_US
-        else:
-            station.standing = 0
-        if station.on_idle:
-            waiting, station.on_idle = station.on_idle, []
-            for callback in waiting:
-                callback()
-        self.kick()
-
-    def resend(self, station, answered):
-        """What a station was sent after message `answered`, sent again as it
-        was, at most every RESEND_GAP_S of wall time."""
-        now = self.loop.time()
-        if now - station.resent_at < RESEND_GAP_S:
-            return
-        station.resent_at = now
-        missed = [data for seq, data in station.unanswered if seq > answered]
-        if missed:
-            self.resends += len(missed)
-            log("station %d missed %d message(s) after %d; sending them again"
-                % (station.sid, len(missed), answered))
-        for data in missed:
-            self.transport.sendto(data, station.addr)
 
     # ---- channels: input that does not come over the air -----------------
 
@@ -1092,15 +940,9 @@ class Ether(asyncio.DatagramProtocol):
         that has been told something has not necessarily taken it yet. A line
         typed at its console goes out once `done` runs, so the station reads
         it at this T, with no message of the ether's landing halfway through.
+        That is now in a real-time run; CoreEther's waits in a virtual one.
         """
-        station = self.stations.get(sid)
-        if not self.clock.virtual or station is None or (
-                station.idle and station.told >= self.clock.t):
-            done()
-            return
-        station.on_idle.append(done)
-        if station.told < self.clock.t:
-            self.send(sid, {"type": "run"})
+        done()
 
     def drained(self):
         """The testbed has read what the stations printed (`on_drain`): T may
@@ -1297,8 +1139,8 @@ class Ether(asyncio.DatagramProtocol):
 
     def console_marks(self, fd):
         """The marks a reader of the console on `fd` keeps for
-        stations.printed, or None for the testbed's own: Ether's conductor
-        asks on_drain at every barrier and looks at none of them."""
+        stations.printed, or None for the testbed's own: a real-time run has
+        no barrier to ask on_drain at, and looks at none of them."""
         return None
 
     def watch(self, sid, marks):
@@ -1465,7 +1307,7 @@ class Ether(asyncio.DatagramProtocol):
         sid = msg.get("sid")
         kind = msg.get("type")
         # What is held for the barrier (a virtual run's state and tx) goes into
-        # the record when it is taken, in station order (flush_pending): two
+        # the record when it is taken, in station order (take_held): two
         # stations saying something at one instant arrive in whichever order
         # the host ran them.
         held = self.clock.virtual and kind in ("state", "tx")
@@ -1482,67 +1324,30 @@ class Ether(asyncio.DatagramProtocol):
                 self.recv_state(sid, addr, msg)
             elif kind == "tx":
                 self.recv_tx(sid, addr, msg)
-        elif kind == "idle":
-            self.recv_idle(sid, msg)
         elif kind in ("wrote", "read"):
             self.recv_io(sid, addr, msg)
         elif kind == "floor":
             self.recv_floor(sid, addr, msg)
-        elif kind in ("state", "tx"):
-            # Held for the barrier, and taken in station order there, so two
-            # stations acting at one instant are ruled on the same way every
-            # time. Anything a station says means it is not idle.
-            station = self.stations.get(sid)
-            if station is None:
-                return
-            station.addr = addr
-            self.mark(station, False)
-            self.arrivals += 1
-            self.pending.append((sid, self.arrivals, addr, msg))
+        # A virtual run's idle, state and tx never come here: the core takes
+        # them (held for the barrier, and taken in station order there, so two
+        # stations acting at one instant are ruled on the same way every time).
         # Anything else is not ours to understand.
 
     def send(self, sid, msg):
         """Send one message to a station, at the address it last wrote from.
 
-        In a virtual-time run every message is an instant: it carries T and
-        the station's next sequence number, and the station owes an idle for
-        that number before T can move again.
+        In a virtual-time run every message is an instant, which CoreEther
+        sends: it carries T and the station's next sequence number, and the
+        station owes an idle for that number before T can move again.
         """
         station = self.stations.get(sid)
         if station is None or self.transport is None:
             return
-        data = None
-        if self.clock.virtual:
-            station.seq += 1
-            station.granted_at = self.loop.time()
-            self.mark(station, False)
-            msg = dict(msg, seq=station.seq)
-            msg.setdefault("t", self.clock.t)
-            station.told = max(station.told, msg["t"])
-            data = json.dumps(msg).encode("utf-8")
-            station.unanswered.append((station.seq, data))
         if msg.get("type") != "run":
             self.write_record("out", sid, msg)
         else:
             self.runs += 1
-        if data is not None and self.advancing and station.lines:
-            # The barrier's: this instant's datagram, sent when it stops.
-            if not station.outbox:
-                self.outboxed.append(sid)
-            station.outbox.append(data)
-            return
-        self.transport.sendto(data or json.dumps(msg).encode("utf-8"), station.addr)
-
-    def send_outboxes(self):
-        """Each station's messages of this instant in one datagram, a line
-        each: it applies them together, so none of its threads sees part of T."""
-        sids, self.outboxed = self.outboxed, []
-        for sid in sids:
-            station = self.stations.get(sid)
-            if station is None or not station.outbox or self.transport is None:
-                continue
-            lines, station.outbox = station.outbox, []
-            self.transport.sendto(b"\n".join(lines), station.addr)
+        self.transport.sendto(json.dumps(msg).encode("utf-8"), station.addr)
 
     def stamp(self):
         """What heads a record line: the wall clock, or T in a virtual run."""
@@ -1565,7 +1370,6 @@ class Ether(asyncio.DatagramProtocol):
         if station is None:
             station = Station(sid, addr, slots or [0])
             self.stations[sid] = station
-            self.busy_count += 1            # not idle until it says so
             log("station %d joined from %s:%d" % (sid, addr[0], addr[1]))
         else:
             station.addr = addr
@@ -1985,9 +1789,9 @@ class Ether(asyncio.DatagramProtocol):
 # moved, the stations due sent a `run`. ether_core, built from ether/core
 # (`sim-mesh build ether`), does that in Rust on the ether's socket, in the
 # event loop's thread; CoreEther is Ether with that conductor and everything
-# else as Ether has it, called at the same points. Ether's own conductor stays
-# the reference, and SIM_MESH_ETHER_CORE picks: `python` for it, `rust` for the
-# core (an error when it is not built), unset for the core when it is built.
+# else as Ether has it. It is the only conductor: the one Ether had in Python,
+# which the core was proved against record for record, is gone, and a
+# virtual-time run without the core built is refused saying so.
 
 CORE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "build", "ether_core.abi3.so")
@@ -1995,19 +1799,12 @@ _core_module = None
 
 
 def core_module():
-    """ether_core, or None when the Python conductor is to run."""
+    """ether_core, which conducts every virtual-time run."""
     global _core_module
-    wanted = os.environ.get("SIM_MESH_ETHER_CORE", "")
-    if wanted not in ("", "rust", "python"):
-        raise ValueError("SIM_MESH_ETHER_CORE is rust or python, not %r" % wanted)
-    if wanted == "python":
-        return None
     if _core_module is None:
         if not os.path.exists(CORE_PATH):
-            if wanted == "rust":
-                raise RuntimeError("SIM_MESH_ETHER_CORE=rust, and there is no %s "
-                                   "(sim-mesh build ether)" % CORE_PATH)
-            return None
+            raise RuntimeError("a virtual-time run is conducted by ether_core, and there is "
+                               "no %s (sim-mesh build ether)" % CORE_PATH)
         import importlib.util
         spec = importlib.util.spec_from_file_location("ether_core", CORE_PATH)
         module = importlib.util.module_from_spec(spec)
@@ -2139,8 +1936,8 @@ def _core_count(name):
 class CoreEther(Ether):
     """Ether with its conductor in ether_core. `sock` is the ether's bound
     UDP socket, which the core reads and writes in the loop's thread; the
-    core calls back into the methods named `_core_*` below at the points
-    Ether's own conductor does that work, so a run takes the same steps."""
+    core calls back into the methods named `_core_*` below at the points of
+    the barrier where the ether does its part."""
 
     def __init__(self, sock, record_path, physics=None, seed=None, time_mode="max",
                  pairwise=False, epoch=None, bench_capture=False, module=None):
@@ -2148,8 +1945,6 @@ class CoreEther(Ether):
         if mode != "virtual":
             raise ValueError("the core conducts virtual-time runs; this one is %s" % mode)
         module = module or core_module()
-        if module is None:
-            raise RuntimeError("no ether core to conduct with")
         sock.setblocking(False)
         self.sock = sock
         self.core_module = module
@@ -2160,8 +1955,6 @@ class CoreEther(Ether):
                        pairwise=pairwise, epoch=epoch, bench_capture=bench_capture)
         self.clock = CoreClock(self.core)
         self.expected = _Expected(self.core)
-        # The core's now: what is left of them here would only go stale.
-        del self.busy_count, self.pending, self.dirty, self.advancing
         self.transport = _CoreTransport(self)
         self.loop.add_reader(self.core.wake_fd, self.core.pump)
 
@@ -2203,33 +1996,20 @@ class CoreEther(Ether):
     def asks(self, asks):
         self._asks = _Asks(self.core, asks)
 
-    # ---- Ether's conductor, which the core does ---------------------------
+    # ---- the conductor, which the core does -------------------------------
 
     def kick(self):
+        """Move T as far as the barrier lets it, now."""
         self.core.kick()
 
     def busy(self):
+        """True while T must wait: a station started and not yet idle, input
+        a reader has not taken, or the testbed's own work at this instant."""
         return self.core.busy()
 
-    def next_instant(self):
-        return self.core.next_instant()
-
     def mark(self, station, idle):
+        """Whether a station has said it is idle since it was last told anything."""
         self.core.mark(station.sid, idle)
-
-    def recv_idle(self, sid, msg):
-        seq, until = msg.get("seq"), msg.get("until")
-        if isinstance(seq, int):
-            self.core.recv_idle(sid, seq, int(until) if isinstance(until, (int, float)) else None)
-
-    def step_to(self, t):
-        raise NotImplementedError("the core moves T")
-
-    def flush_pending(self):
-        raise NotImplementedError("the core holds what stations said")
-
-    def resend(self, station, answered):
-        raise NotImplementedError("the core keeps what it sent")
 
     def send(self, sid, msg):
         granted = self.core.grant(sid, msg.get("t"))
@@ -2305,7 +2085,7 @@ class CoreEther(Ether):
 
     def _core_flush(self, batch):
         """What stations said while T stood still, (sid, addr, datagram) in
-        station order (flush_pending)."""
+        station order, as the core held them for the barrier."""
         self.take_held((sid, addr, json.loads(data.decode("utf-8")))
                        for sid, addr, data in batch)
 
@@ -2342,13 +2122,13 @@ class CoreEther(Ether):
 
 async def open_ether(bind, record_path, physics=None, time_mode="real", **kw):
     """The ether on `bind`, as (transport, ether): with its conductor in the
-    core when the run is in virtual time and the core is there to be had."""
+    core when the run is in virtual time."""
     loop = asyncio.get_running_loop()
     mode, _ = parse_time_mode(time_mode)
-    module = core_module() if mode == "virtual" else None
-    if module is None:
+    if mode != "virtual":
         return await loop.create_datagram_endpoint(
             lambda: Ether(record_path, physics, time_mode=time_mode, **kw), local_addr=bind)
+    module = core_module()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         with contextlib.suppress(OSError):

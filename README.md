@@ -74,8 +74,8 @@ git clone https://github.com/sim-mesh/sim-mesh.git
 
 **2. Build** the page, the chip library, the ether's conductor and the
 planner (sim-mesh's own, in `planner/`; without cargo the last two are left
-out, sim-mesh says so, synthetic ground works and the ether's Python conductor
-runs virtual time):
+out, sim-mesh says so, synthetic ground works, and a virtual-time run is
+refused until the conductor is built; real time needs none):
 
 ```sh
 sim-mesh/sim-mesh build
@@ -1798,7 +1798,7 @@ None needs firmware, a planner or a network:
 
 ```sh
 cd sim-mesh/testbed && python3 -m pytest -q      # the stores, the devices, the front, simd, the kinds, the library, the tools
-cd sim-mesh/ether   && python3 -m pytest -q      # the medium and both conductors, over real UDP and in-process
+cd sim-mesh/ether   && python3 -m pytest -q      # the medium and the conductor (built first), over real UDP and in-process
 cd sim-mesh/radio   && python3 -m pytest -q tests  # the chip model, the conductor, the time shim
 cd sim-mesh/testbed/ui && npx vue-tsc --noEmit && npx quasar build
 ```

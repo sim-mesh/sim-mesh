@@ -217,7 +217,7 @@ class Record:
         and header's ends they carry, on the ether's clock, pin its start.
         Frames alike in all of that take their numbers in the order the
         barrier took them, station by station within one batch (ether.py
-        flush_pending), each the first of them every rx_begin of its number
+        take_held), each the first of them every rx_begin of its number
         fits, at the level each names where any does.
         """
         alike = collections.defaultdict(list)       # (pre, hdr, end) -> frames
