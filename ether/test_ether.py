@@ -540,6 +540,37 @@ def test_a_station_in_cad_senses_a_frame_but_is_never_told_how_it_ended(ether):
     assert ends == []
 
 
+def test_a_multi_sf_receiver_decodes_the_faster_sfs_it_states(ether):
+    """A receiver at SF9 that states it also hears SF6 to SF8 (`sfs`, as an
+    LR2021's side detectors do) decodes an SF7 frame on its carrier, and one
+    at SF10, which it does not state, not at all. A receiver that states
+    nothing decodes neither."""
+    ether.link(1, 2, NEAR_DB)
+    ether.link(1, 3, NEAR_DB)
+    sender, multi, single = ether(1), ether(2), ether(3)
+    sender.hello()
+    multi.hello()
+    single.hello()
+    multi.state("RX", sfs=[6, 7, 8, 9])
+    single.state("RX")
+    time.sleep(0.1)
+
+    def ends(station):
+        kinds = []
+        while (msg := station.recv(0.3)) is not None:
+            kinds.append(msg["type"])
+        return kinds.count("rx_end")
+
+    sender.tx(1, payload=b"at SF7", sf=7)
+    end = multi.expect("rx_end")
+    assert end["verdict"] == "clean" and base64.b64decode(end["payload"]) == b"at SF7"
+    assert ends(single) == 0
+    time.sleep(FRAME_US / 1e6 + 0.1)
+    sender.tx(2, sf=10)
+    assert ends(multi) == 0
+    assert ends(single) == 0
+
+
 def test_carrier_sense_hears_energy_over_the_threshold_at_any_sf(ether):
     """At 125 kHz the sense threshold is −81 dBm. An SF7 frame at −76 dBm is
     energy to a CAD and to a receiver at SF9; one at −96 dBm is nothing to

@@ -225,6 +225,13 @@ void etherPublishState(const EtherState& s)
         "{\"type\":\"state\",\"sid\":%d,\"t\":%lld,\"mode\":\"%s\",\"ready_at\":%lld,",
         s_sid, (long long)S()->now_us(), s.mode, (long long)s.readyAt);
     appendState(line, sizeof line, &at, s);
+    /* What a multi-SF receiver hears besides `sf`; a frame goes out at one. */
+    if (s.sfCount > 1) {
+        at += (size_t)snprintf(line + at, sizeof line - at, ",\"sfs\":[");
+        for (int i = 0; i < s.sfCount; i++)
+            at += (size_t)snprintf(line + at, sizeof line - at, "%s%d", i ? "," : "", s.sfs[i]);
+        at += (size_t)snprintf(line + at, sizeof line - at, "]");
+    }
     at += (size_t)snprintf(line + at, sizeof line - at, "}");
     sendLine(line, at);
 }

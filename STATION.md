@@ -19,6 +19,7 @@ the testbed; what differs between firmwares beyond it is a **kind**
 | `SIM_MESH_SEED` | virtual time: the ether's seed, the one its `welcome` carries; the shim keys the station's `getentropy`/`getrandom` by it and `SIM_MESH_NODE_ID` |
 | `LD_PRELOAD` | virtual time: `radio/build/libsimclock.so`, the time shim |
 | `SIM_MESH_IDLE` | virtual time, set by a kind whose firmware does not call `simradio_idle()` itself: `threads`, and the shim says the station is idle when every thread is blocked (below) |
+| `SIM_MESH_MULTI_SF` | optional, from a kind's `env:`: set (and not `0`), the chip model's receiver also hears the faster spreading factors below its own on its bandwidth, as an LR2021's multi-SF receive does (its side detectors, by that chip's rule: SF7 at 125 kHz hears SF5 to SF7), and states them to the ether (`sfs`). An SX1262 has no such thing: it stands in for the LR2021, which the model does not have, where firmware is judged against it |
 | `SIM_MESH_CLOCK_PROFILE` | optional, from a kind's `env:`, or from simd's `--clock-ppm` (a crystal off by a draw within that many parts per million, per station): node time as a function of T, `T:node,T:node,…` in microseconds, both columns increasing, slope 1 outside the points. Absent, node time is T |
 | the kind's `env:` | anything the binary needs beyond that |
 

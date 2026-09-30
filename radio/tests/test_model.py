@@ -575,6 +575,43 @@ def test_the_sync_word_register_publishes_the_word_it_encodes(chip):
     assert state["sync"] == 0x42
 
 
+def test_a_chip_states_no_other_spreading_factors_unless_asked(chip):
+    if os.environ.get("SIM_MESH_MULTI_SF"):
+        pytest.skip("this process was told its radio is a multi-SF receiver")
+    chip.ether.clear()
+    chip.write(SET_MODULATION, 7, 0x04, 0x01, 0x00)
+    _, state = chip.ether.expect("state")
+    assert state["sf"] == 7 and "sfs" not in state
+
+
+def multi_sf_case(chip):
+    """Run in a child told SIM_MESH_MULTI_SF (the model reads it once per
+    process): the receiver states the faster SFs an LR2021 hears beside its
+    own, by that chip's rule for the SF and bandwidth it is set to."""
+    chip.ether.clear()
+    chip.write(SET_MODULATION, 7, 0x04, 0x01, 0x00)     # SF7, 125 kHz
+    _, state = chip.ether.expect("state")
+    assert state["sf"] == 7 and state["sfs"] == [5, 6, 7]
+    chip.write(SET_MODULATION, 10, 0x04, 0x01, 0x01)    # SF10: three below it
+    _, state = chip.ether.expect("state")
+    assert state["sfs"] == [7, 8, 9, 10]
+    chip.write(SET_MODULATION, 5, 0x04, 0x01, 0x00)     # SF5 has none below it
+    _, state = chip.ether.expect("state")
+    assert state["sf"] == 5 and "sfs" not in state
+
+
+def test_a_multi_sf_receiver_states_the_faster_sfs_it_hears(chip):
+    if os.environ.get("SIM_MESH_MULTI_SF"):
+        multi_sf_case(chip)
+        return
+    env = dict(os.environ, SIM_MESH_MULTI_SF="1")
+    done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                           "%s::%s" % (os.path.abspath(__file__),
+                                       "test_a_multi_sf_receiver_states_the_faster_sfs_it_hears")],
+                          env=env, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
 # ---------------------------------------------------------------------------
 # 10. Channel activity detection
 # ---------------------------------------------------------------------------

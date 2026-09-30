@@ -33,6 +33,11 @@ struct EtherState {
     bool        hdrImplicit;
     bool        crc;
     int         preamble;
+    /* A multi-SF receiver's spreading factors (SIM_MESH_MULTI_SF): `sf` and
+     * the faster ones it also hears, ascending; sfCount 0 on a single-SF
+     * receiver, which is every chip unless the station asks. */
+    int         sfs[4];
+    int         sfCount;
 };
 
 /** A frame leaving this radio. */

@@ -1695,8 +1695,11 @@ class Ether(asyncio.DatagramProtocol):
 
     @staticmethod
     def matches(state, tx):
-        """True when a receiver's stated radio can decode this transmission."""
-        return (all(state.get(k) == tx.get(k) for k in MATCH_KEYS)
+        """True when a receiver's stated radio can decode this transmission:
+        its bandwidth and sync word, and its spreading factor or, on a
+        multi-SF receiver, any of those it states it also hears (`sfs`)."""
+        return (all(state.get(k) == tx.get(k) for k in MATCH_KEYS if k != "sf")
+                and (state.get("sf") == tx.get("sf") or tx.get("sf") in (state.get("sfs") or ()))
                 and same_carrier(state.get("freq"), tx.get("freq"), state.get("bw")))
 
     # ---- arrival: the lock ----------------------------------------------
