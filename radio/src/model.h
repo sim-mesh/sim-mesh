@@ -13,6 +13,13 @@
  * its interrupt, drains, and re-enables sees exactly the edges it sees on a
  * board.
  *
+ * Commands take effect at once (BUSY is never busy), with one exception the
+ * part imposes itself: with DIO3 driving a TCXO (SetDIO3AsTCXOCtrl), leaving
+ * STDBY_RC or SLEEP for a mode that runs on the reference waits out the
+ * start-up the driver programmed. A frame goes on the air, and a receiver or a
+ * CAD starts, only then; meanwhile the medium sees the chip as FS. STDBY_XOSC,
+ * FS and a fallback to either keep the reference running, as on the part.
+ *
  * What is between two radios is the ether (ether_link.cpp): the model hands it
  * every transmission and every change of mode or carrier, and is handed back
  * the frames that reach its antenna.

@@ -38,6 +38,7 @@ SET_STANDBY, SET_RX, SET_TX, SET_RF_FREQUENCY = 0x80, 0x82, 0x83, 0x86
 SET_CAD_PARAMS, SET_PACKET_TYPE, SET_MODULATION = 0x88, 0x8A, 0x8B
 SET_PACKET_PARAMS, SET_RXTX_FALLBACK, SET_CAD = 0x8C, 0x93, 0xC5
 SET_TX_PARAMS, SET_PA_CONFIG = 0x8E, 0x95
+SET_DIO3_TCXO = 0x97
 SET_DIO_IRQ_PARAMS, CLEAR_IRQ, WRITE_REGISTER, WRITE_BUFFER = 0x08, 0x02, 0x0D, 0x0E
 GET_IRQ, GET_RX_BUF_STATUS, GET_PACKET_STATUS, GET_RSSI_INST = 0x12, 0x13, 0x14, 0x15
 READ_REGISTER, READ_BUFFER, GET_STATUS = 0x1D, 0x1E, 0xC0
@@ -769,3 +770,62 @@ def test_a_front_end_shapes_what_goes_out_and_what_the_chip_reads(chip):
                                        "test_a_front_end_shapes_what_goes_out_and_what_the_chip_reads")],
                           env=env, capture_output=True, text=True, timeout=60)
     assert done.returncode == 0, done.stdout + done.stderr
+
+
+# ---------------------------------------------------------------------------
+# The TCXO's start-up
+# ---------------------------------------------------------------------------
+
+# A start-up long enough to measure on a host's timers (RadioLib asks for 5 ms):
+# 6400 steps of 15.625 µs.
+TCXO_STEPS, TCXO_S = 6400, 0.1
+
+
+def tcxo(chip):
+    """DIO3 drives a TCXO at 1.8 V that takes TCXO_S to start."""
+    chip.write(SET_DIO3_TCXO, 0x02, *TCXO_STEPS.to_bytes(3, "big"))
+
+
+def test_from_stdby_rc_the_carrier_waits_out_the_tcxo_start_up(chip):
+    chip.configure(length=10)
+    tcxo(chip)
+    chip.write(SET_STANDBY, 0x00)
+    chip.frame([WRITE_BUFFER, 0x00, *range(10)])
+    chip.ether.clear()
+    sent = time.monotonic()
+    chip.write(SET_TX, 0x00, 0x00, 0x00)
+    chip.ether.expect("state", mode="FS")           # neither sending nor listening yet
+    at, tx = chip.ether.expect("tx")
+    assert TCXO_S - 0.002 <= at - sent <= TCXO_S + HOST_TIMER_LATE_S
+    assert tx["t_end"] - tx["t0"] == int(toa_seconds(10) * 1e6)
+
+
+def test_stdby_xosc_keeps_the_tcxo_running(chip):
+    chip.configure(length=10)
+    tcxo(chip)
+    chip.write(SET_STANDBY, 0x01)
+    settle(TCXO_S + HOST_TIMER_LATE_S)              # started once, and kept
+    chip.frame([WRITE_BUFFER, 0x00, *range(10)])
+    chip.ether.clear()
+    sent = time.monotonic()
+    chip.write(SET_TX, 0x00, 0x00, 0x00)
+    at, _ = chip.ether.expect("tx")
+    assert at - sent < HOST_TIMER_LATE_S
+
+
+def test_a_fallback_to_rc_stops_the_tcxo_and_the_receiver_waits_for_it(chip):
+    chip.configure(length=10, dio1=TX_DONE)
+    tcxo(chip)
+    chip.write(SET_STANDBY, 0x01)
+    settle(TCXO_S + HOST_TIMER_LATE_S)
+    chip.write(SET_RXTX_FALLBACK, 0x20)              # STDBY_RC after a frame
+    chip.frame([WRITE_BUFFER, 0x00, *range(10)])
+    chip.write(SET_TX, 0x00, 0x00, 0x00)
+    chip.wait_irq(TX_DONE)
+    chip.ether.clear()
+    asked = time.monotonic()
+    chip.write(SET_RX, 0xFF, 0xFF, 0xFF)
+    chip.ether.expect("state", mode="FS")
+    at, st = chip.ether.expect("state", mode="RX")
+    assert TCXO_S - 0.002 <= at - asked <= TCXO_S + HOST_TIMER_LATE_S
+

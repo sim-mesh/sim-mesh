@@ -299,6 +299,14 @@ struct ChipState {
     uint8_t     fallbackBits = ST_STDBY_RC;
     const char* fallbackMode = "STDBY_RC";
 
+    /* The reference oscillator. With DIO3 driving a TCXO (SetDIO3AsTCXOCtrl)
+     * the part powers it down in STDBY_RC and SLEEP, and leaving those for a
+     * mode that runs on it waits out the start-up the driver programmed
+     * before anything happens: the carrier, the receiver, the CAD (BUSY high
+     * on the part). No TCXO control (a crystal) is no wait, as before. */
+    int64_t tcxoUs = 0;
+    int64_t oscReadyUs = 0;    /* when the reference running now is, or was, ready */
+
     uint16_t irqStatus = 0;
     uint16_t irqMask = 0;
     uint16_t dio1Mask = 0;
@@ -391,6 +399,13 @@ struct simradio {
     void* tSync = nullptr;
     void* tHdr = nullptr;
     void* tCad = nullptr;
+
+    /* The end of a TCXO start-up, and the frame SetTx asked for before it:
+     * it goes on the air when the reference is ready. */
+    void* tOscReady = nullptr;
+    bool pendTxValid = false;
+    EtherTxFrame pendTx = {};
+    uint8_t pendTxPayload[256] = {};
 };
 
 namespace {
@@ -444,12 +459,26 @@ uint8_t syncWordOf(const ChipState& d)
     return (uint8_t)((m & 0xF0) | ((l & 0xF0) >> 4));
 }
 
+/* Whether a mode runs on the reference oscillator: all but STDBY_RC and SLEEP. */
+bool oscillates(const char* mode)
+{
+    return strcmp(mode, "STDBY_RC") != 0 && strcmp(mode, "SLEEP") != 0;
+}
+
+/* What is left of a TCXO start-up, from now. */
+int64_t oscWaitUs(const ChipState& d, int64_t now)
+{
+    return d.oscReadyUs > now ? d.oscReadyUs - now : 0;
+}
+
 void fillState(const simradio* c, EtherState& s)
 {
     const ChipState& d = c->st;
     s.slot        = c->slot;
-    s.mode        = d.mode;
-    s.readyAt     = S()->now_us();   /* transitions are instantaneous here */
+    int64_t now   = S()->now_us();
+    bool starting = oscWaitUs(d, now) > 0;
+    s.mode        = starting ? "FS" : d.mode;   /* the reference still starting */
+    s.readyAt     = starting ? d.oscReadyUs : now;
     s.freqHz      = d.freqHz;
     s.bwHz        = d.bwHz;
     s.sf          = d.sf;
@@ -462,6 +491,8 @@ void fillState(const simradio* c, EtherState& s)
 
 void setMode(ChipState& d, const char* mode, uint8_t bits)
 {
+    if (oscillates(mode) && !oscillates(d.mode))
+        d.oscReadyUs = S()->now_us() + d.tcxoUs;
     d.mode = mode;
     d.modeBits = bits;
 }
@@ -532,6 +563,7 @@ int airLevelDbm(const ChipState& d, int64_t now)
 }
 
 void txDoneCb(void* arg);
+void oscReadyCb(void* arg);
 void rxPreCb(void* arg);
 void rxSyncCb(void* arg);
 void rxHdrCb(void* arg);
@@ -584,6 +616,8 @@ extern "C" simradio_t* simradio_open(int slot, void (*on_pin)(void*, int, int), 
         stopTimer(c->tSync);
         stopTimer(c->tHdr);
         stopTimer(c->tCad);
+        stopTimer(c->tOscReady);
+        c->pendTxValid = false;
         c->st = ChipState();
     }
     c->onPin = on_pin;
@@ -601,6 +635,8 @@ extern "C" void simradio_close(simradio_t* c)
     stopTimer(c->tSync);
     stopTimer(c->tHdr);
     stopTimer(c->tCad);
+    stopTimer(c->tOscReady);
+    c->pendTxValid = false;
     c->onPin = nullptr;
     c->ctx = nullptr;
     S()->unlock();
@@ -652,6 +688,10 @@ extern "C" void simradio_reset(simradio_t* c)
     S()->lock();
     setMode(c->st, "STDBY_RC", ST_STDBY_RC);
     c->st.irqStatus = 0;
+    c->st.tcxoUs = 0;
+    c->st.oscReadyUs = 0;
+    stopTimer(c->tOscReady);
+    c->pendTxValid = false;
     PinCall pin = dio1Of(c);
     S()->unlock();
     pin();
@@ -698,6 +738,7 @@ extern "C" void simradio_transfer(simradio_t* c, const uint8_t* out, size_t len,
         publishState = true;
         break;
 
+
     case CMD_SET_TX: {
         setMode(d, "TX", ST_TX);
         /* `cr` is already the denominator of 4/n, which is what the formula
@@ -718,6 +759,17 @@ extern "C" void simradio_transfer(simradio_t* c, const uint8_t* out, size_t len,
         for (int i = 0; i < d.payloadLen; i++) txPayload[i] = d.buf[(uint8_t)(d.txBase + i)];
         frame.payload = txPayload;
         frame.len = d.payloadLen;
+        int64_t wait = oscWaitUs(d, now);
+        if (wait > 0) {
+            /* The carrier comes when the reference is ready (oscReadyCb). */
+            c->pendTx = frame;
+            memcpy(c->pendTxPayload, txPayload, (size_t)d.payloadLen);
+            c->pendTx.payload = c->pendTxPayload;
+            c->pendTxValid = true;
+            armOnce(c, &c->tOscReady, oscReadyCb, wait);
+            publishState = true;
+            break;
+        }
         publishTx = true;
         c->txEnd = frame.tEnd;
         armOnce(c, &c->tTxDone, txDoneCb, frame.tEnd - now);
@@ -860,11 +912,18 @@ extern "C" void simradio_transfer(simradio_t* c, const uint8_t* out, size_t len,
     case CMD_CALIBRATE:
     case CMD_CALIBRATE_IMAGE:
     case CMD_SET_DIO2_RF_SWITCH:
-    case CMD_SET_DIO3_TCXO:
     case CMD_STOP_TIMER_ON_PRE:
     case CMD_SET_LORA_SYMB_TO:
     case CMD_CLEAR_DEVICE_ERR:
     case CMD_RESET_STATS:
+        break;
+
+    case CMD_SET_DIO3_TCXO:
+        /* The voltage, then the start-up as 24 bits of 15.625 µs. */
+        if (len >= 5) {
+            uint32_t steps = ((uint32_t)out[2] << 16) | ((uint32_t)out[3] << 8) | out[4];
+            d.tcxoUs = (int64_t)steps * 1000 / 64;
+        }
         break;
 
     case CMD_SET_CAD_PARAMS:
@@ -884,7 +943,9 @@ extern "C" void simradio_transfer(simradio_t* c, const uint8_t* out, size_t len,
          * says CAD, which is what the medium delivers energy to. */
         setMode(d, "CAD", ST_RX);
         double tSym = (double)((uint32_t)1 << d.sf) / (double)d.bwHz;
-        armOnce(c, &c->tCad, cadDoneCb, (int64_t)(d.cadSymbols * tSym * 1e6));
+        int64_t wait = oscWaitUs(d, S()->now_us());
+        armOnce(c, &c->tCad, cadDoneCb, wait + (int64_t)(d.cadSymbols * tSym * 1e6));
+        if (wait > 0) armOnce(c, &c->tOscReady, oscReadyCb, wait);
         publishState = true;
         break;
     }
@@ -906,6 +967,18 @@ extern "C" void simradio_transfer(simradio_t* c, const uint8_t* out, size_t len,
 
     if (op == CMD_SET_STANDBY || op == CMD_SET_SLEEP || op == CMD_SET_FS || op == CMD_SET_TX)
         abandonReception(c);
+    /* A mode on a reference still starting is said to the medium when it is
+     * ready (oscReadyCb); one without the reference stops a start-up, and a
+     * frame waiting on it. */
+    if (op == CMD_SET_STANDBY || op == CMD_SET_FS || op == CMD_SET_RX || op == CMD_SET_SLEEP) {
+        int64_t wait = oscWaitUs(d, S()->now_us());
+        if (!oscillates(d.mode)) {
+            stopTimer(c->tOscReady);
+            c->pendTxValid = false;
+        } else if (wait > 0) {
+            armOnce(c, &c->tOscReady, oscReadyCb, wait);
+        }
+    }
     if (op == CMD_SET_CAD)
         dropLock(c);
     /* Any other mode ends a CAD in progress without an answer. */
@@ -933,6 +1006,37 @@ void raise(simradio* c, uint16_t bits)
     PinCall pin = dio1Of(c);
     S()->unlock();
     pin();
+}
+
+/* The reference is ready: a frame SetTx asked for goes on the air now, and
+ * otherwise the medium is told the mode the chip has been in since its
+ * command. */
+void oscReadyCb(void* arg)
+{
+    auto* c = (simradio*)arg;
+    EtherState s;
+    EtherTxFrame frame = {};
+    bool tx = false;
+    S()->lock();
+    int64_t now = S()->now_us();
+    if (c->pendTxValid && strcmp(c->st.mode, "TX") == 0) {
+        frame = c->pendTx;
+        int64_t shift = now - frame.t0;
+        frame.t0 += shift;
+        frame.tPre += shift;
+        frame.tHdr += shift;
+        frame.tEnd += shift;
+        fillState(c, frame.state);
+        c->pendTxValid = false;
+        c->txEnd = frame.tEnd;
+        armOnce(c, &c->tTxDone, txDoneCb, frame.tEnd - now);
+        tx = true;
+    } else {
+        fillState(c, s);
+    }
+    S()->unlock();
+    if (tx) etherPublishTx(frame);
+    else    etherPublishState(s);
 }
 
 /* TX_DONE lands at the end of the frame, and the chip falls back to whatever
