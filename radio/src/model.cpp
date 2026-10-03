@@ -448,9 +448,9 @@ uint8_t syncWordOf(const ChipState& d)
  * (and not "0"), its receiver hears the faster spreading factors below its
  * own on the same bandwidth, as that chip's multi-SF receive does: the same
  * air, one demodulator, the frame at whichever SF it came. An SX1262 has no
- * such thing, so it is off unless a station asks; it stands in for the
- * LR2021, which sim-mesh does not model, where firmware is to be judged
- * against it. */
+ * such thing, so it is off unless a station asks; it lets a firmware built
+ * on the SX1262's driver be judged against the LR2021's receiver
+ * (libsimradio-lr2021.so is that chip itself). */
 static bool multiSfReceiver()
 {
     static const bool on = [] {

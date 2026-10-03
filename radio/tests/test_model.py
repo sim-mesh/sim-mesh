@@ -70,16 +70,16 @@ def toa_seconds(payload, sf=SF, bw=BW, cr=CR, pre=PRE, implicit=False, crc=True)
 PIN_CB = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int, ctypes.c_int)
 
 
-def load_library():
+def load_library(library=LIBRARY):
     """Build the library if it is not there, then load it."""
-    if not os.path.exists(LIBRARY):
+    if not os.path.exists(library):
         cmake = shutil.which("cmake")
         if cmake is None:
-            pytest.fail("no cmake on PATH to build %s" % LIBRARY)
+            pytest.fail("no cmake on PATH to build %s" % library)
         subprocess.run([cmake, "-B", BUILD, "-S", RADIO], check=True,
                        stdout=subprocess.DEVNULL)
         subprocess.run([cmake, "--build", BUILD], check=True, stdout=subprocess.DEVNULL)
-    lib = ctypes.CDLL(LIBRARY)
+    lib = ctypes.CDLL(library)
     lib.simradio_station_open.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p]
     lib.simradio_station_open.restype = ctypes.c_int
     lib.simradio_open.argtypes = [ctypes.c_int, PIN_CB, ctypes.c_void_p]

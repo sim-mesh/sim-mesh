@@ -2040,7 +2040,8 @@ receiver → ether  idle {seq: 7, until: …}
 
 A virtual radio is a model of one radio chip on a virtual SPI bus, and the
 station's link to the ether, as a shared library sim-mesh provides:
-`libsimradio-sx1262.so` is the SX1262. A firmware is compiled against its
+`libsimradio-sx1262.so` is the SX1262, `libsimradio-lr2021.so` the LR2021
+(LoRa only). A firmware is compiled against its
 header, [`radio/include/simradio.h`](radio/include/simradio.h), and linked
 with it **by name** (`-lsimradio-sx1262`), and **must not** carry it:
 sim-mesh puts its own on the station's `LD_LIBRARY_PATH`, so a firmware
@@ -2233,8 +2234,8 @@ virtual-time run, read node time, set wakes, learn every move of T and say
 the station is idle. A station of any language links it by name in place of
 a radio, below an unchanged driver, and sim-mesh provides it when it starts
 the station. The radio is one way of speaking the ether's protocol, which a
-firmware may also speak itself; more radios (an LR2021) are more libraries,
-each named after its chip. Beside it,
+firmware may also speak itself; another radio is another library, named
+after its chip, as the LR2021's is. Beside it,
 `radio/shim/simclock.c` builds `libsimclock.so`, the preloaded library that
 answers the C library's clocks and waits in node time, draws the station's
 randomness from the run's seed, counts the console and TCP bytes the ether
@@ -2249,7 +2250,7 @@ ESP-IDF's Linux host target) hands it its own with `simradio_set_services`
 before anything else, from its own code.
 
 `sim` builds them as it starts (`radio/build/`: `libsimradio-sx1262.so`,
-`libsimclock.so`); a station is given the radio from there, and a virtual
+`libsimradio-lr2021.so`, `libsimclock.so`); a station is given the radio from there, and a virtual
 run preloads the shim from there.
 
 ## Working on the page
@@ -2275,8 +2276,8 @@ cd sim-mesh/testbed/ui && npx vue-tsc --noEmit && npx quasar build
 
 The testbed's tests run stand-in firmware (`testbed/stub_firmware.py`): a
 shell script for a station and a driver that writes down what it is asked.
-The model's tests load `libsimradio-sx1262.so` with ctypes, drive it frame by
-frame the way a driver does, and play the ether on a UDP socket of their
+The models' tests load `libsimradio-sx1262.so` and `libsimradio-lr2021.so`
+with ctypes, drive them frame by frame the way a driver does, and play the ether on a UDP socket of their
 own; the conductor's tests do the same in virtual time, and the shim's run a
 small C stand-in station (`radio/tests/standin.c`), linked with the radio by
 name as a firmware is, under `libsimclock.so`. The
