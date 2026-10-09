@@ -64,3 +64,5 @@ void etherPublishTx(const EtherTxFrame& f);
  *  read what a host sent (`station`), or the host again once it has been
  *  answered. The ether keeps T still while a testbed tool has the floor. */
 void etherPublishFloor(bool station);
+/* Floor runs applied so far (`simradio_floor_runs`). */
+uint64_t etherFloorRuns();

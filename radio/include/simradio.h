@@ -141,6 +141,14 @@ void simradio_idle(void);
  * run's T (a `run` marked `floor`), which an idle station is behind. */
 void simradio_host_floor(int station);
 
+/* How many runs marked `floor` have been applied: the one a station's floor
+ * asks for is counted in the datagram that brings it, before any thread
+ * that grant wakes runs. A host thread that hands the station bytes tagged
+ * with the count before taking the floor lets the station take them exactly
+ * at the first look that sees the count past the tag, at a T the run decides,
+ * whichever thread ran first on the host. */
+uint64_t simradio_floor_runs(void);
+
 /* A host whose own clock is a function of node time — a kernel tick counted
  * from it — learns of every move: `moved()` runs each time a grant moves T, on
  * the thread that received it, with no lock held, before any wake or timer

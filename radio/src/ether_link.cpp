@@ -189,6 +189,8 @@ void handleDatagram(const char* text, size_t len)
 
 /* ---- Outbound ---- */
 
+uint64_t etherFloorRuns() { return s_floorRuns.load(); }
+
 void etherPublishFloor(bool station)
 {
     if (!conductor::isVirtual()) return;

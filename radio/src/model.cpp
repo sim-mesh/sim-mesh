@@ -862,6 +862,11 @@ extern "C" void simradio_host_floor(int station)
     etherPublishFloor(station != 0);
 }
 
+extern "C" uint64_t simradio_floor_runs(void)
+{
+    return etherFloorRuns();
+}
+
 extern "C" int64_t simradio_quiet_for_us(simradio_t* c)
 {
     if (!c || !conductor::isVirtual()) return -1;
