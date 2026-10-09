@@ -62,15 +62,24 @@ def has_fem(own):
     return max_dbm(own) > CHIP_MAX_DBM
 
 
-def environment(own):
+def environment(own, busy_us="", busy_tcxo=False, host_us=0):
     """What a station of this `max_dbm` is told of its board: SIM_MESH_BOARD's
     JSON, one flat object (the chip model and hw-linux read it with a flat
     reader): chip, max_dbm, and fem_part, fem_tx_cal, fem_gain_db and
-    fem_rx_gain_db when it has the front end."""
+    fem_rx_gain_db when it has the front end; and, when a run asks for them,
+    the chip's BUSY per command, `busy_us`, `busy_tcxo` 1 to charge the
+    TCXO's start, and `host_us`, the board's own time per transaction
+    (radio/src/model.cpp, `busyFigures`)."""
     out = {"chip": CHIP, "max_dbm": max_dbm(own)}
     if has_fem(own):
         out.update(fem_part=FEM["part"], fem_tx_cal=FEM["tx_cal"],
                    fem_gain_db=FEM["gain_db"], fem_rx_gain_db=FEM["rx_gain_db"])
+    if busy_us:
+        out["busy_us"] = busy_us
+    if busy_tcxo:
+        out["busy_tcxo"] = 1
+    if host_us:
+        out["host_us"] = host_us
     return json.dumps(out, sort_keys=True)
 
 

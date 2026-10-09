@@ -15,6 +15,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import boards  # noqa: E402
 import drivers  # noqa: E402
 import firmware  # noqa: E402
 import simd  # noqa: E402
@@ -229,6 +230,102 @@ def test_a_drifting_clock_needs_virtual_time():
         simd.parse_args(["--clock-ppm", "20"])
     with pytest.raises(SystemExit):
         simd.parse_args(["--time", "max", "--clock-ppm", "-1"])
+
+
+def test_a_run_fades_as_its_flags_say_and_records_it(stores):
+    """--fading-db, --coherence-s and --rician-k (--slow-fading-db etc. still
+    spell them) reach the ether's physics and the run's record of its medium;
+    without them neither fades."""
+    async def go():
+        daemon = make_simd(stores, "--fading-db", "4", "--coherence-s", "30",
+                           "--rician-k", "0")
+        await daemon.start_ether()
+        await daemon.do_sim_load({"geodata": "flat", "nodeset": "three", **FAR})
+        physics = daemon.ether.physics
+        assert (physics.fading_db, physics.coherence_s, physics.rician_k) == \
+            (4.0, 30.0, 0.0)
+        assert daemon.run.meta["physics"] == {
+            "noise_figure_db": 6.0, "pairwise": False,
+            "fading_db": 4.0, "coherence_s": 30.0, "rician_k": 0.0}
+        await daemon.stop_all(flush=False)
+        daemon.ether.close()
+    asyncio.run(go())
+    plain = simd.parse_args([])
+    assert (plain.fading_db, plain.rician_k) == (0.0, None)
+    for bad in (["--slow-fading-db", "-1"], ["--slow-fading-s", "0"],
+                ["--fast-fading-k", "-0.5"]):
+        with pytest.raises(SystemExit):
+            simd.parse_args(bad)
+
+
+def test_each_board_is_told_the_chips_busy_only_when_the_run_gives_it(stores):
+    """--busy-us and --busy-tcxo: the chip's BUSY per command reaches every
+    station's SIM_MESH_BOARD, and the run records it with its medium; a run
+    without them tells each board what it told it before."""
+    async def go():
+        daemon = make_simd(stores, "--busy-us", "CalibrateImage:6632,SetRx:65",
+                           "--busy-tcxo")
+        await daemon.start_ether()
+        await daemon.do_sim_load({"geodata": "flat", "nodeset": "three", **FAR})
+        assert daemon.run.meta["physics"] == {
+            "noise_figure_db": 6, "pairwise": False,
+            "busy_us": "CalibrateImage:6632,SetRx:65", "busy_tcxo": True}
+        assert await until(lambda: len(daemon.stations) == 3)
+        for station in daemon.stations.values():
+            told = json.loads(station.board)
+            assert told["busy_us"] == "CalibrateImage:6632,SetRx:65"
+            assert told["busy_tcxo"] == 1
+        await daemon.stop_all(flush=False)
+        daemon.ether.close()
+    asyncio.run(go())
+    args = simd.parse_args([])
+    assert (args.busy_us, args.busy_tcxo) == ("", False)
+    assert json.loads(boards.environment(14, args.busy_us, args.busy_tcxo)) == \
+        {"chip": "sx1262", "max_dbm": 14}
+    for spec in ("CalibrateImage", "SetRx:-5", "SetRx:65,", "SetRx=65", "lr2021.:10",
+                 ".CalibFE:10", "a.b.CalibFE:10"):
+        with pytest.raises(SystemExit):
+            simd.parse_args(["--busy-us", spec])
+    # Another chip's entries, qualified with its name, beside the SX1262's bare
+    # ones: one run gives each chip of a mixed network its own figures.
+    mixed = "SetRx:65,lr2021.CalibFE:10500,sx1262.SetStandby:68"
+    assert simd.parse_args(["--busy-us", mixed]).busy_us == mixed
+
+
+def test_short_waits_and_the_hosts_time_reach_the_stations_only_when_the_run_gives_them(stores):
+    """--short-waits chip, in a virtual-time run, has a station's waits shorter
+    than a millisecond end at its chip's next event (SIM_MESH_SHORT_WAITS), and
+    --host-us gives its board the host's own time per transaction; the run
+    records both with its medium, and without them a station is told nothing
+    new."""
+    async def go():
+        daemon = make_simd(stores, "--time", "max", "--busy-us", "SetRx:65",
+                           "--short-waits", "chip", "--host-us", "29")
+        await daemon.start_ether()
+        await daemon.do_sim_load({"geodata": "flat", "nodeset": "three"})
+        assert daemon.run.meta["physics"] == {
+            "noise_figure_db": 6, "pairwise": False, "busy_us": "SetRx:65",
+            "host_us": 29, "short_waits": "chip"}
+        daemon.ether.close()
+    asyncio.run(go())
+    import types
+    station = types.SimpleNamespace(node_id=1, dir="d", addr="a", ether_addr="e",
+                                    clock=types.SimpleNamespace(epoch=0, seed=5),
+                                    board=boards.environment(14, "SetRx:65", False, 29),
+                                    short_waits="chip")
+    env = drivers.env(station, {})
+    assert env["SIM_MESH_SHORT_WAITS"] == "chip"
+    assert json.loads(env["SIM_MESH_BOARD"])["host_us"] == 29
+    station.short_waits = None
+    assert "SIM_MESH_SHORT_WAITS" not in drivers.env(station, {})
+    args = simd.parse_args([])
+    assert (args.short_waits, args.host_us) == (None, 0)
+    assert "host_us" not in json.loads(boards.environment(14, "", False, args.host_us))
+    for bad in (["--short-waits", "chip"], ["--time", "max", "--host-us", "29"],
+                ["--time", "max", "--short-waits", "chip", "--host-us", "-1"],
+                ["--time", "max", "--short-waits", "ms"]):
+        with pytest.raises(SystemExit):
+            simd.parse_args(bad)
 
 
 def test_moves_offsets_ids_and_levels(stores):
@@ -592,6 +689,44 @@ def test_firmware_rules_start_restart_and_leave_idle(stores):
                                                          "firmware": STUB}]})
         got = [m for m in daemon.said if m["type"] == "command_result"][-1]
         assert got["id"] == "f3" and "selection" in got["error"]
+        await daemon.stop_all(flush=False)
+        daemon.ether.close()
+    asyncio.run(go())
+
+
+def test_a_station_restarted_before_its_first_boot_is_through_is_set_up_on_the_new_one(
+        stores, monkeypatch):
+    """A script's firmware rules that come a moment apart (one for every node,
+    then a nodeset's own for some of them) can restart a station whose first
+    boot has only begun: its state is what the firmware wrote as it came up,
+    and it is set up on the new firmware all the same."""
+    async def go():
+        daemon = make_simd(stores)
+        await daemon.start_ether()
+        await daemon.do_sim_load({"geodata": "flat", "nodeset": "three"})
+        await daemon.do_first_boot({"id": "b1", "rules": [
+            {"which": {"all": True}, "lines": ["hello {name}"]}]})
+        hold = asyncio.Event()
+        setup = daemon.setup_entries
+
+        async def slow(station, entries):
+            if station.driver.firmware["base"] == "stub":
+                await setup(station, entries[:1])   # its name: state written already
+                await hold.wait()                   # the rest still to come
+            await setup(station, entries)
+        monkeypatch.setattr(daemon, "setup_entries", slow)
+        await daemon.do_firmware({"id": "f1", "rules": [
+            {"which": {"names": ["a"]}, "firmware": STUB}]})
+        assert await until(lambda: daemon.stations.get("a") and
+                           daemon.stations["a"].status == "setup")
+        await daemon.do_firmware({"id": "f2", "rules": [
+            {"which": {"names": ["a"]}, "firmware": "other_latest"}]})
+        assert await until(lambda: daemon.stations.get("a") and
+                           daemon.stations["a"].status == "up")
+        assert daemon.driver_of("a").firmware["base"] == "other"
+        assert lines_of(daemon.run, "a")[-1] == "hello a", "set up on the new firmware"
+        assert not daemon.setup_owed
+        hold.set()
         await daemon.stop_all(flush=False)
         daemon.ether.close()
     asyncio.run(go())

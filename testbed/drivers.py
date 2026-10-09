@@ -108,6 +108,9 @@ def env(station, build):
     profile = getattr(station, "clock_profile", None)
     if station.clock is not None and profile:
         out["SIM_MESH_CLOCK_PROFILE"] = profile
+    short_waits = getattr(station, "short_waits", None)
+    if station.clock is not None and short_waits:
+        out["SIM_MESH_SHORT_WAITS"] = short_waits
     for key, value in (build.get("env") or {}).items():
         if key == "LD_LIBRARY_PATH" and out.get(key):
             # The firmware's own libraries first, the radio's still found.

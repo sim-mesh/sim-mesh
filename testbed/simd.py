@@ -321,6 +321,7 @@ class Simd:
         self.rules = []                     # firmware rules, [{which, firmware}], in order
         self.first_boot = []                # first-boot rules, [{which, lines}], in order
         self.firmware = {}                  # node name -> the firmware it runs
+        self.setup_owed = set()             # restarted before their first boot was through
         self.grounds = {}                   # node name -> the ground under it, m above sea
         self.tables = {}                    # band -> slt.Table, the model's own
         self.sidecar = args.sidecar         # planner-web base URL, for a pack
@@ -663,8 +664,10 @@ class Simd:
             on_status=self.station_status, on_output=self.station_output,
             clock=self.ether if self.virtual else None, on_event=self.station_event)
         station.watchers = len(self.consoles.get(name, ()))
-        station.board = boards_module.environment(node.get("max_dbm"))
+        station.board = boards_module.environment(node.get("max_dbm"), self.args.busy_us,
+                                                  self.args.busy_tcxo, self.args.host_us)
         station.clock_profile = self.clock_profile(name)
+        station.short_waits = self.args.short_waits
         return station
 
     def clock_profile(self, name):
@@ -728,7 +731,11 @@ class Simd:
             log("station %s never came up (%s)" % (station.name,
                                                    station.driver.firmware["firmware"]))
             return
-        if not station.was_configured:
+        # A station restarted before its first boot was through has state, what
+        # its firmware wrote as it came up, and is set up all the same.
+        fresh = not station.was_configured or station.name in self.setup_owed
+        self.setup_owed.discard(station.name)
+        if fresh:
             station.set_status(stations_module.SETUP)
             try:
                 await self.send_setup(station)
@@ -739,7 +746,7 @@ class Simd:
         station.set_status(stations_module.UP)
         log("station %s is up at t %.3f s" % (station.name, self.ether.now() / 1e6))
         await self.read_role(station)
-        if not station.was_configured:
+        if fresh:
             # Not everything setup asks for lands at once: an LXMF identity
             # reaches the store some seconds after the command that created it
             # has returned. One more flush once that has settled, so a station
@@ -1305,6 +1312,11 @@ class Simd:
                 self.broadcast(self.node_message(name))
                 continue
             had_state = station.configured
+            # Its first boot not through yet (a script's rules that came a
+            # moment apart, the first already starting it): owed on the new
+            # firmware, whatever state the old one wrote as it came up.
+            if not station.was_configured and station.status != stations_module.UP:
+                self.setup_owed.add(name)
             await self.stop_station(name)
             await self.start_station(name)
             driver = self.driver_of(name)
@@ -1873,6 +1885,7 @@ class Simd:
         self.rules = [self.check_rule(r) for r in rules]
         self.first_boot = [self.check_first_boot(r) for r in first_boot]
         self.firmware = {}
+        self.setup_owed = set()
         self.grounds = {n: g for n, g in (run.meta.get("grounds") or {}).items() if n in ns.nodes}
         self.sidecar = sidecar or self.args.sidecar
         self.plan = None                    # a plan is for the run it was sent in
@@ -1885,6 +1898,14 @@ class Simd:
             medium["bench_capture"] = True
         if self.args.clock_ppm:
             medium["clock_ppm"] = self.args.clock_ppm
+        if self.args.busy_us:
+            medium["busy_us"] = self.args.busy_us
+        if self.args.busy_tcxo:
+            medium["busy_tcxo"] = True
+        if self.args.host_us:
+            medium["host_us"] = self.args.host_us
+        if self.args.short_waits:
+            medium["short_waits"] = self.args.short_waits
         run.set(physics=medium, seed=self.ether.seed)
         await self.find_grounds([n for n in ns.nodes if n not in self.grounds])
         self.apply_to_ether()
@@ -2200,20 +2221,45 @@ def parse_args(argv):
                     help="in a virtual-time run, each station's crystal off by a draw "
                          "uniform within this many parts per million, from the seed "
                          "and its name (default 0: every clock true)")
+    ap.add_argument("--busy-us", default="", metavar="SPEC",
+                    help="the chip's BUSY per command, as a board spends it: "
+                         "<command>:<us> entries separated by commas, the commands "
+                         "named as the datasheet names them (CalibrateImage:6632,"
+                         "SetRx:65, …), the SX1262's bare and another chip's "
+                         "qualified with its name (lr2021.CalibFE:10500); the radio "
+                         "is deaf while a retune's lasts (default: none, BUSY never "
+                         "busy)")
+    ap.add_argument("--busy-tcxo", action="store_true",
+                    help="charge the TCXO's start, as the firmware programmed it, to "
+                         "the first command after STDBY_RC, sleep or a reset that "
+                         "needs the oscillator")
+    ap.add_argument("--host-us", type=int, default=0, metavar="US",
+                    help="the board's own time per SPI transaction, its bus and its "
+                         "driver, held as BUSY after every one (some 29 on a RAK "
+                         "board; default 0: none)")
+    ap.add_argument("--short-waits", choices=["chip"],
+                    help="in a virtual-time run, a station's wait shorter than a "
+                         "millisecond ends at its chip's next event, BUSY falling, when "
+                         "that comes first (default: on the millisecond)")
     ap.add_argument("--bench-capture", action="store_true",
                     help="rule on two frames of one spreading factor as a bench saw them "
                          "meet, instead of by the same-SF figure")
-    ap.add_argument("--fading-db", type=float, default=ether_module.DEFAULT_FADING_DB,
+    ap.add_argument("--fading-db", "--slow-fading-db", dest="fading_db",
+                    type=float, default=ether_module.DEFAULT_FADING_DB,
                     help="fading: the spread in dB of every link's level over time "
-                         "(default %g: none)" % ether_module.DEFAULT_FADING_DB)
-    ap.add_argument("--coherence-s", type=float,
-                    default=ether_module.DEFAULT_COHERENCE_S,
+                         "(default %g: none; --slow-fading-db is Sergey's fork's name "
+                         "for this same setting)" % ether_module.DEFAULT_FADING_DB)
+    ap.add_argument("--coherence-s", "--slow-fading-s", dest="coherence_s",
+                    type=float, default=ether_module.DEFAULT_COHERENCE_S,
                     help="fading: how long, in seconds, a link's level stays alike "
-                         "(default %g)" % ether_module.DEFAULT_COHERENCE_S)
-    ap.add_argument("--rician-k", type=float, default=ether_module.DEFAULT_RICIAN_K,
+                         "(default %g; --slow-fading-s aliases this)"
+                    % ether_module.DEFAULT_COHERENCE_S)
+    ap.add_argument("--rician-k", "--fast-fading-k", dest="rician_k",
+                    type=float, default=ether_module.DEFAULT_RICIAN_K,
                     metavar="K",
                     help="fast fading: one Rician draw per frame at each receiver, of "
-                         "this K factor, 0 for Rayleigh (default: none)")
+                         "this K factor, 0 for Rayleigh (default: none; --fast-fading-k "
+                         "aliases this)")
     ap.add_argument("--no-interference", action="store_true",
                     help="an oracle: the ether judges every frame against noise alone "
                          "and never takes a receiver off the frame it follows; what "
@@ -2259,10 +2305,19 @@ def parse_args(argv):
                              coherence_s=args.coherence_s, rician_k=args.rician_k)
     except ValueError as err:
         ap.error(str(err))
+    if args.busy_us and not re.fullmatch(r"(\w+\.)?\w+:\d+(,(\w+\.)?\w+:\d+)*", args.busy_us):
+        ap.error("--busy-us is [<chip>.]<command>:<us> entries separated by commas")
     if not 0 <= args.clock_ppm <= 1000:
         ap.error("--clock-ppm is parts per million, 0 to 1000")
     if args.clock_ppm and args.time == "real":
         ap.error("--clock-ppm needs virtual time: in real time a station's clock is the host's")
+    if args.short_waits and args.time == "real":
+        ap.error("--short-waits needs virtual time: in real time a station's waits are the host's")
+    if args.host_us < 0:
+        ap.error("--host-us is microseconds")
+    if args.host_us and not args.short_waits:
+        ap.error("--host-us needs --short-waits chip: on the millisecond every transaction "
+                 "would cost up to one")
     args.run = os.path.abspath(args.run)
     args.public_port = args.bind.rpartition(":")[2]
     # The relay binds the same number as the page, on UDP — one number to
