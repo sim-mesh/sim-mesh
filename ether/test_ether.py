@@ -1820,6 +1820,26 @@ def test_an_idle_said_twice_counts_once(conductor):
     a.expect_nothing(0.3)
 
 
+def test_an_idle_from_another_address_is_not_the_stations(conductor):
+    """A station speaks from the address it said hello from. Another run's
+    station, its ether gone and this port taken by a new one, still writing
+    idles under the same id is not taken for it: T does not move for it."""
+    a, b = conductor(1), conductor(2)
+    join_virtual(a)
+    join_virtual(b)
+    idle(b, 1, None)
+    other = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        other.bind(("127.0.0.1", 0))
+        other.sendto(json.dumps({"type": "idle", "sid": 1, "seq": 1,
+                                 "until": 5_000}).encode(), a.ether)
+        a.expect_nothing(0.3)
+    finally:
+        other.close()
+    idle(a, 1, 5_000)
+    assert a.expect("run")["seq"] == 2
+
+
 def test_anything_a_station_says_retracts_its_idle(conductor):
     a, b = conductor(1), conductor(2)
     join_virtual(a)
