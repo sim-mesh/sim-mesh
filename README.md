@@ -561,8 +561,11 @@ sim-mesh ships:
 - **terrain and clutter**: the state surveys' 1 m terrain and their surface
   models where the rectangle touches Germany (every state), AHN's (0.5 m)
   where it touches the Netherlands,
-  BEV's 1 m terrain and surface where it touches Austria,
-  Copernicus GLO-30 everywhere else; in the United States, USGS 3DEP's
+  BEV's 1 m terrain and surface where it touches Austria, and the national
+  or regional lidar models of France, Flanders, Norway, Estonia, Czechia,
+  Malta, Andalucía, Catalonia, Navarra and South Tyrol (a terrain alone,
+  each cell keeping its clutter, in Poland, Galicia and five more Italian
+  regions), Copernicus GLO-30 everywhere else; in the United States, USGS 3DEP's
   10 m terrain under GLO-30's clutter;
 - **buildings**: the same states' LoD2 models (all but Hessen's, whose
   LoD2 comes only per municipality), 3DBAG's in the Netherlands,
@@ -627,6 +630,19 @@ is fetched once, resumed where it stopped, and one its host does not have
 | CBS 2023 100 m grid | the Netherlands | `download.cbs.nl` |
 | BEV ALS DTM and DSM, 1 m, 50 km squares | Austria | `data.bev.gv.at`: only the windows of the squares meeting the rectangle |
 | Statistik Austria 2026 100 m grid | Austria | `statistik.at`'s INSPIRE download |
+| DHMV II DTM and DSM, 1 m | Flanders | Digitaal Vlaanderen's coverage service (WCS), each 1 km square in UTM 31 |
+| LiDAR HD MNT and MNS, 1 m | metropolitan France | IGN's raster map service (`data.geopf.fr/wms-r`), each 1 km square in the UTM zone (30, 31 or 32) of its part of France |
+| NHM DTM and DOM, 1 m | Norway | Kartverket's coverage service (WCS), each 1 km square in UTM 33 |
+| DTM 1 m, DSM 5 m | Estonia | Maa- ja Ruumiamet's coverage service (WCS), each 1 km square in UTM 35 |
+| NMT 1 m (terrain) | Poland | GUGiK's coverage service (WCS), each 1 km square in UTM 34 |
+| DMR 5G and DMP 1G, 2 m | Czechia | ČÚZK's image services, each 1 km square in UTM 33 |
+| MDT and MDS, 1 m | Andalucía | REDIAM's file share, 2 km cloud-optimised tiles named by their north-west corner: only the windows meeting the rectangle |
+| MET and MS, 1 m | Catalonia | ICGC: one cloud-optimised GeoTIFF of about 100 GB each, only its window |
+| MDT and MDS 2024, 2 m | Navarra | IDENA's coverage service (WCS), each 1 km square in UTM 30 |
+| MDT 2 m (terrain) | Galicia | the Xunta's image service, each 1 km square in UTM 29 |
+| DTM and DSM, 2.5 m | South Tyrol | the province's coverage service (WCS), each 1 km square in UTM 32 |
+| DTM (terrain): RER 2023-24 1 m, 5 m, 5 m, 5 m, 2 m | Emilia-Romagna (its 2023-24 survey), Piemonte, Lombardia, Campania, Sicilia | the regions' coverage and image services, each 1 km square in UTM 32 or 33 |
+| DTM and DSM 2012, 1 m | Malta | the Planning Authority's coverage service (WCS), each 1 km square in UTM 33 |
 | 3DEP 1/3 arc-second terrain, 1° tiles | the United States | `prd-tnm.s3.amazonaws.com`: only the windows of the tiles meeting the rectangle |
 | Annual NLCD 2025 land cover, 30 m | the conterminous United States | `mrlc.gov`: one 1.5 GB zip |
 | WorldPop 2025 population, 3 arc-seconds | the United States | `data.worldpop.org`: one 1.5 GB GeoTIFF; the host does not resume a broken download |
@@ -725,10 +741,13 @@ europe:                             # a continent
   data there (`missing: error` makes it a failed build). A host that
   refuses HEAD is asked for a file's first two bytes to learn its size,
   and one that does not send its intermediate certificate is reached
-  through the intermediates in `sources/intermediates.pem`.
+  through the intermediates in `sources/intermediates.pem`. A GeoTIFF a
+  template asks for that comes back as an exception page (XML, HTML or
+  JSON, 200 or 400) or as anything but a TIFF is no data there: that is
+  how coverage services answer outside their extent.
 - **Reading** is `whole`, the file, resumed when a fetch breaks off, or
-  `window`, for a regional cloud-optimised GeoTIFF an index or a template
-  finds: its directories and only
+  `window`, for a regional terrain or surface as cloud-optimised GeoTIFF
+  that an index, a template or a `file` finds: its directories and only
   the chunks the rectangle meets, at the coarsest level whose pixel is no
   larger than a quarter of the pack's cell, fetched by HTTP range into a
   sparse copy of the file (its `.ranges` beside it says what it holds). A
@@ -744,7 +763,10 @@ europe:                             # a continent
     projection sim-mesh knows: a regional terrain or surface, land cover,
     or population as people per pixel. A terrain with a surface in its
     projection is a pair, both halves measured; a terrain alone replaces
-    only the ground, each cell keeping its clutter.
+    only the ground, each cell keeping its clutter. A file may place its
+    image by pixel scale and tiepoint or by a model transformation (north-up,
+    unrotated, as GeoServer writes it), and a chunk it stores as no bytes is
+    no data.
   - `xyz` (1 m) and `citygml`, in an ETRS89 UTM zone (`crs`, EPSG:25832
     or 25833) as the German state surveys deliver them; a pack in another
     zone takes them projected into its own. XYZ terrain and surface tiles
@@ -769,13 +791,17 @@ europe:                             # a continent
   sentence saying which.
 - **Projections** a source may name are EPSG:4326, NAD83 (EPSG:4269, taken
   as WGS 84's degrees), EPSG:3035, Conus Albers (EPSG:5070), UTM (WGS 84,
-  ETRS89 and NAD83 zones) and RD New (EPSG:28992, and EPSG:7415 for its
-  heights).
+  ETRS89 and NAD83 zones, and the national systems that are a UTM zone
+  under a code of their own: Italy's RDN2008, EPSG:7791, 7792, 6707 and
+  6708, SWEREF99 TM, EPSG:3006, and ETRS-TM35FIN, EPSG:3067) and RD New
+  (EPSG:28992, and EPSG:7415 for its heights). Many services reproject on
+  request, so a source asks them for a UTM zone: France's, Flanders',
+  Estonia's, Poland's and Czechia's models are served in UTM though
+  surveyed in national systems.
 - **Layers** are `surface`, `terrain`, `landcover`, `buildings`,
   `population`, `roads`, `places` and `radio-climate`, each source with its
-  priority in each. The German states' and the Netherlands' terrain,
-  surface and buildings, and Austria's terrain and surface, are 100 to
-  GLO-30's and OpenStreetMap's
+  priority in each. Every national and regional terrain, surface and
+  buildings source is 100 to GLO-30's and OpenStreetMap's
   10; Brandenburg's are 90, since its outline holds Berlin, whose own come
   first there. NLCD's land cover is 100 to WorldCover's 10.
 
@@ -783,9 +809,12 @@ Shipped beyond the worldwide set: Germany (every state's 1 m terrain and
 surface, every state's LoD2 but Hessen's, and the Zensus 2022 grid), the
 Netherlands (AHN's 0.5 m terrain and surface, the 3DBAG
 buildings and CBS's 100 m population grid), Austria (BEV's 1 m terrain and
-surface, and Statistik Austria's 100 m population grid) and the United
-States (3DEP's 1/3 arc-second terrain, NLCD land cover and WorldPop's
-population grid).
+surface, and Statistik Austria's 100 m population grid), lidar terrain and
+surface models in Belgium (Flanders), France, Norway, Estonia, Czechia,
+Spain (Andalucía, Catalonia, Navarra) and Malta, terrain models in Poland,
+Spain (Galicia) and Italy (South Tyrol with its surface, and five regions),
+and the United States (3DEP's 1/3 arc-second terrain, NLCD land cover and
+WorldPop's population grid).
 
 An id is one source: a person's file may not take one sim-mesh ships (a
 second address for the same data is a mirror, in the shipped entry). Every

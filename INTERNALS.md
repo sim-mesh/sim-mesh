@@ -754,7 +754,10 @@ the rectangle (with the shipped ones: the state surveys' terrain, surface
 and LoD2 where it touches a German state, Hessen's LoD2 excepted,
 the Zensus grid where it touches Germany, AHN, 3DBAG and CBS where it
 touches the Netherlands, BEV's terrain and surface and Statistik
-Austria's grid where it touches Austria, 3DEP, NLCD and WorldPop where it
+Austria's grid where it touches Austria, the lidar terrain and surface
+models of France, Flanders, Norway, Estonia, Czechia, Malta and four
+Spanish and Italian regions, and terrain models in Poland and six more
+regions, 3DEP, NLCD and WorldPop where it
 touches the United States, GLO-30 and OpenStreetMap everywhere) and says what
 each is used for, so the page offers no choice and the dialog after
 **Build** reads the same list. `packbuild` hands each chosen source's files
@@ -805,7 +808,21 @@ they are general, never per source: one that refuses HEAD is asked for two
 bytes (GeoSN's shares answer `bytes=0-0` with the whole file), one that
 omits its intermediate certificate is reached through the intermediates
 shipped beside the source file, and a CityGML or XYZ file with a page
-appended after it (Schleswig-Holstein's) is read up to its end. Tiles in metres are found in
+appended after it (Schleswig-Holstein's) is read up to its end. A GeoTIFF
+a template asks of a service is checked for what it is: an exception page
+in its place (Norway's 200, Estonia's 400, Galicia's JSON labelled
+image/tiff) is no data there, and so is a chunk the file stores as no
+bytes (Norway's and Czechia's empty boxes), which read would decode the
+file's header as heights.
+
+**A service that reprojects is asked for UTM.** Most national surveys keep
+their models in a national projection (Lambert-93, Lambert 72, L-EST97,
+CS92, S-JTSK), and many of their coverage and image services reproject on
+request. Asking those for a 1 km square of a UTM zone keeps sim-mesh to
+the projections it already reads, at the cost of one resampling on the
+server; a projection is added only for data no service reprojects. A
+national system that is a UTM zone under its own code (RDN2008,
+SWEREF99 TM, ETRS-TM35FIN) is that zone. Tiles in metres are found in
 the source's own system: the rectangle's reach projected there
 (`crs.plane`, LAEA Europe by Snyder's ellipsoidal formulas for BEV's 50 km
 squares), the squares meeting it, and a cached square drawn back in

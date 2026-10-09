@@ -6,6 +6,8 @@ the compiler need of each.
                            taken as them
     EPSG:326zz, 327zz      UTM on WGS84, north and south
     EPSG:258zz             UTM on ETRS89 (Berlin's data)
+    EPSG:7791, 7792,       UTM 32, 33, 32, 33, 33 and 35 on GRS80 under national codes
+    6707, 6708, 3006, 3067 (Italy's RDN2008, SWEREF99 TM, ETRS-TM35FIN)
     EPSG:269zz             UTM on NAD83, zones 1 to 23 (the US state and federal surveys)
     EPSG:3035              ETRS89 / LAEA Europe (Zensus's grid)
     EPSG:5070              NAD83 / Conus Albers (NLCD)
@@ -69,6 +71,8 @@ def per_metre(crs):
 
 
 def _utm(code):
+    if code in geodata.UTM_ALIASES:
+        return geodata.UTM_ALIASES[code], False, "GRS80"
     for base, south, ellps, last in ((32600, False, "WGS84", 60), (32700, True, "WGS84", 60),
                                      (25800, False, "GRS80", 60), (26900, False, "GRS80", 23)):
         if 1 <= code - base <= last:

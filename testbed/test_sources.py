@@ -18,6 +18,7 @@ from aiohttp import web
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import crs  # noqa: E402
 import geodata  # noqa: E402
 import packbuild  # noqa: E402
 import sourcefile  # noqa: E402
@@ -437,6 +438,14 @@ def test_the_shipped_sources_hold_together():
                              "th-dgm1", "th-dom1", "th-lod2",
                              "ahn-dtm", "ahn-dsm", "3dbag", "cbs-population",
                              "bev-als-dtm", "bev-als-dsm", "statistik-austria-population",
+                             "flanders-dtm", "flanders-dsm", "fr-lidarhd-mnt-30",
+                             "fr-lidarhd-mns-30", "fr-lidarhd-mnt-31", "fr-lidarhd-mns-31",
+                             "fr-lidarhd-mnt-32", "fr-lidarhd-mns-32", "no-nhm-dtm", "no-nhm-dom",
+                             "ee-dtm", "ee-dsm", "pl-nmt", "cz-dmr5g", "cz-dmp1g", "andalucia-mdt",
+                             "andalucia-mds", "catalunya-met", "catalunya-ms", "navarra-mdt",
+                             "navarra-mds", "galicia-mdt", "bz-dtm", "bz-dsm", "emilia-romagna-dtm",
+                             "piemonte-dtm", "lombardia-dtm", "campania-dtm", "sicilia-mdt",
+                             "mt-dtm", "mt-dsm",
                              "usgs-3dep-13", "nlcd", "worldpop-us"]
     for source in SHIPPED.values():
         assert source.worldwide == (source.continent == sourcefile.GLOBAL)
@@ -444,6 +453,9 @@ def test_the_shipped_sources_hold_together():
         assert source.redistributable == (source.id != "itu")
     assert SHIPPED["zensus"].where == "Europe › Germany"
     assert SHIPPED["3dbag"].where == "Europe › Netherlands"
+    assert SHIPPED["no-nhm-dtm"].where == "Europe › Norway"            # "NO", quoted
+    # Italy's RDN2008 / UTM 32 is UTM 32 on GRS80, as ETRS89's is.
+    assert sourcefile.proj_of(SHIPPED["emilia-romagna-dtm"]) == crs.proj("EPSG:25832")
     assert SHIPPED["nlcd"].where == "North America › United States"
     assert sourcefile.proj_of(SHIPPED["ahn-dtm"]).startswith("+proj=sterea")
     assert sourcefile.proj_of(SHIPPED["nlcd"]).startswith("+proj=aea +lat_0=23 +lon_0=-96")
@@ -506,7 +518,7 @@ def test_a_source_that_does_not_hold_together_is_refused_saying_why(tmp_path, ch
     ("nlcd", lambda e: e["format"]["classes"].update({11: "sea"}), "'sea' is no clutter class"),
     ("nlcd", lambda e: e.update(layers={"landcover": 1, "population": 1}), "a GeoTIFF feeds one layer"),
     ("nlcd", lambda e: e["format"].update(crs="EPSG:2263"), "format.crs EPSG:2263 is not a system"),
-    ("worldpop-us", lambda e: e.update(read="window"), "a window is read of the files an index or a"),
+    ("worldpop-us", lambda e: e.update(read="window"), "a window is read of a terrain or a surface"),
     ("usgs-3dep-13", lambda e: e["find"].update(size_deg=0.5), "whole number of them (size_deg)"),
     ("usgs-3dep-13", lambda e: e["find"].update(crs="EPSG:26910"),
      "tiles in metres are size_m wide"),
@@ -697,9 +709,10 @@ def test_a_build_fetches_what_it_needs_and_hands_the_compiler_its_inputs(tmp_pat
     async def check(base, session, calls):
         reg = served_sources(tmp_path, base)
         (served / "glo30").mkdir()
-        (served / "glo30" / "Copernicus_DSM_COG_10_N52_00_E013_00_DEM.tif").write_bytes(b"dem")
+        (served / "glo30" / "Copernicus_DSM_COG_10_N52_00_E013_00_DEM.tif").write_bytes(
+            b"II*\0dem")
         (served / "wc").mkdir()
-        (served / "wc" / "N51E012.tif").write_bytes(b"wc")
+        (served / "wc" / "N51E012.tif").write_bytes(b"II*\0wc")
         with zipfile.ZipFile(served / "itu.zip", "w") as zf:
             zf.writestr("DN50.TXT", "dn")
             zf.writestr("N050.TXT", "n0")
@@ -714,7 +727,7 @@ def test_a_build_fetches_what_it_needs_and_hands_the_compiler_its_inputs(tmp_pat
 
         planned = await sources.plan(cache, {"bbox": MITTE, "res_m": 30}, sources=reg)
         rows = {r["source"]: r for r in planned["sources"]}
-        assert rows["geofabrik"]["to_fetch"] == 300 and rows["glo30"]["to_fetch"] == 3
+        assert rows["geofabrik"]["to_fetch"] == 300 and rows["glo30"]["to_fetch"] == 7
         assert planned["extract"]["id"] == "berlin"
         assert rows["berlin-lod2"]["used_for"] == "buildings"
         assert rows["geofabrik"]["used_for"] == \
@@ -843,7 +856,7 @@ def test_a_sources_area_and_its_cache_come_from_names_feeds_and_outlines(tmp_pat
     lat, lon = sources.zone_of("EPSG:25833").inverse(386500, 5818500)
     beside = asyncio.run(sources.sources_at(cache, lon, lat, SHIPPED))
     assert not beside["berlin-dgm1"]["has"] and beside["zensus"]["has"]
-    away = asyncio.run(sources.sources_at(cache, 2.35, 48.85, SHIPPED))
+    away = asyncio.run(sources.sources_at(cache, 31.24, 30.04, SHIPPED))      # Cairo
     assert [s for s, v in away.items() if v["has"]] == ["glo30", "worldcover", "itu", "geofabrik"]
     assert not any(v["cached"] for v in away.values())
 

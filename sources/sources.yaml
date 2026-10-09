@@ -1387,6 +1387,752 @@ europe:
         read: whole
         format: { type: inspire-pd-grid, members: "*.gml" }
 
+  BE:
+    name: Belgium
+    sources:
+      - id: flanders-dtm
+        title: Flanders DHMV II DTM, 1 m terrain
+        holds: >-
+          Flanders' terrain model from lidar (DHMV II, 2013 to 2015): the bare
+          ground's height at 1 m, asked of its coverage service (WCS) a 1 km
+          square at a time in UTM 31, as GeoTIFF of about 4 MB.
+        licence: Modellicentie Gratis Hergebruik 1.0
+        notice: "Bron: Digitaal Vlaanderen, DHMV II (Modellicentie Gratis Hergebruik v1.0)"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://geo.api.vlaanderen.be/DHMV/wcs?service=WCS&version=1.0.0&request=GetCoverage&coverage=DHMVII_DTM_1m&CRS=EPSG:25831&RESPONSE_CRS=EPSG:25831&RESX=1&RESY=1&FORMAT=GeoTIFF&BBOX={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "dhmv2_dtm_31_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25831
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25831, nodata: -9999 }
+
+      - id: flanders-dsm
+        title: Flanders DHMV II DSM, 1 m surface
+        holds: >-
+          Flanders' surface model from lidar (DHMV II, 2013 to 2015): the
+          height of whatever is on top, roofs and tree crowns, at 1 m, asked of
+          its coverage service (WCS) a 1 km square at a time in UTM 31, as
+          GeoTIFF of about 4 MB.
+        licence: Modellicentie Gratis Hergebruik 1.0
+        notice: "Bron: Digitaal Vlaanderen, DHMV II (Modellicentie Gratis Hergebruik v1.0)"
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://geo.api.vlaanderen.be/DHMV/wcs?service=WCS&version=1.0.0&request=GetCoverage&coverage=DHMVII_DSM_1m&CRS=EPSG:25831&RESPONSE_CRS=EPSG:25831&RESX=1&RESY=1&FORMAT=GeoTIFF&BBOX={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "dhmv2_dsm_31_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25831
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25831, nodata: -9999 }
+
+  FR:
+    name: France
+    sources:
+      - id: fr-lidarhd-mnt-30
+        title: IGN LiDAR HD MNT, terrain, UTM 30
+        holds: &fr-mnt >-
+          Metropolitan France's terrain model from lidar (IGN's LiDAR HD,
+          surveyed 2021 to 2025): the bare ground's height, asked of IGN's
+          raster map service at 1 m a 1 km square at a time, in the UTM zone
+          of this part of France, as GeoTIFF of about 4 MB.
+        licence: Licence Ouverte / Open Licence 2.0 (Etalab)
+        notice: &fr-mnt-notice "IGN, MNT LiDAR HD (mise à jour 2026) — Licence Ouverte / Open Licence 2.0 (Etalab)"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=IGNF_LIDAR-HD_MNT_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93&STYLES=normal&FORMAT=image/geotiff&CRS=EPSG:32630&WIDTH=1000&HEIGHT=1000&BBOX={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "mnt_32630_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:32630
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:32630, nodata: -9999 }
+
+      - id: fr-lidarhd-mns-30
+        title: IGN LiDAR HD MNS, surface, UTM 30
+        holds: &fr-mns >-
+          Metropolitan France's surface model from lidar (IGN's LiDAR HD,
+          surveyed 2021 to 2025): the height of whatever is on top, roofs and
+          tree crowns, asked of IGN's raster map service at 1 m a 1 km square
+          at a time, in the UTM zone of this part of France, as GeoTIFF of
+          about 4 MB.
+        licence: Licence Ouverte / Open Licence 2.0 (Etalab)
+        notice: &fr-mns-notice "IGN, MNS LiDAR HD (mise à jour 2026) — Licence Ouverte / Open Licence 2.0 (Etalab)"
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=IGNF_LIDAR-HD_MNS_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93&STYLES=normal&FORMAT=image/geotiff&CRS=EPSG:32630&WIDTH=1000&HEIGHT=1000&BBOX={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "mns_32630_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:32630
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:32630, nodata: -9999 }
+
+      - id: fr-lidarhd-mnt-31
+        title: IGN LiDAR HD MNT, terrain, UTM 31
+        holds: *fr-mnt
+        licence: Licence Ouverte / Open Licence 2.0 (Etalab)
+        notice: *fr-mnt-notice
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=IGNF_LIDAR-HD_MNT_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93&STYLES=normal&FORMAT=image/geotiff&CRS=EPSG:32631&WIDTH=1000&HEIGHT=1000&BBOX={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "mnt_32631_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:32631
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:32631, nodata: -9999 }
+
+      - id: fr-lidarhd-mns-31
+        title: IGN LiDAR HD MNS, surface, UTM 31
+        holds: *fr-mns
+        licence: Licence Ouverte / Open Licence 2.0 (Etalab)
+        notice: *fr-mns-notice
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=IGNF_LIDAR-HD_MNS_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93&STYLES=normal&FORMAT=image/geotiff&CRS=EPSG:32631&WIDTH=1000&HEIGHT=1000&BBOX={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "mns_32631_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:32631
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:32631, nodata: -9999 }
+
+      - id: fr-lidarhd-mnt-32
+        title: IGN LiDAR HD MNT, terrain, UTM 32
+        holds: *fr-mnt
+        licence: Licence Ouverte / Open Licence 2.0 (Etalab)
+        notice: *fr-mnt-notice
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=IGNF_LIDAR-HD_MNT_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93&STYLES=normal&FORMAT=image/geotiff&CRS=EPSG:32632&WIDTH=1000&HEIGHT=1000&BBOX={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "mnt_32632_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:32632
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:32632, nodata: -9999 }
+
+      - id: fr-lidarhd-mns-32
+        title: IGN LiDAR HD MNS, surface, UTM 32
+        holds: *fr-mns
+        licence: Licence Ouverte / Open Licence 2.0 (Etalab)
+        notice: *fr-mns-notice
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=IGNF_LIDAR-HD_MNS_ELEVATION.ELEVATIONGRIDCOVERAGE.LAMB93&STYLES=normal&FORMAT=image/geotiff&CRS=EPSG:32632&WIDTH=1000&HEIGHT=1000&BBOX={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "mns_32632_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:32632
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:32632, nodata: -9999 }
+
+  "NO":                           # quoted: YAML reads a bare NO as false
+    name: Norway
+    sources:
+      - id: no-nhm-dtm
+        title: Kartverket NHM DTM, 1 m terrain
+        holds: >-
+          Norway's national terrain model from lidar (Nasjonal høydemodell):
+          the bare ground's height at 1 m, asked of its coverage service
+          (WCS) a 1 km square at a time in UTM 33, as GeoTIFF of about 4 MB.
+        licence: CC BY 4.0
+        notice: "© Kartverket, Nasjonal høydemodell DTM — CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url:
+            - "https://wcs.geonorge.no/skwms1/wcs.hoyde-dtm-nhm-25833?SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE=nhm_dtm_topo_25833&FORMAT=GeoTIFF&CRS=EPSG:25833&WIDTH=1000&HEIGHT=1000&BBOX={tile}"
+            - "https://hoydedata.no/arcgis/services/NHM_DTM_25833/ImageServer/WCSServer?SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE=nhm_dtm_topo_25833&FORMAT=GeoTIFF&CRS=EPSG:25833&WIDTH=1000&HEIGHT=1000&BBOX={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "nhm_dtm_33_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25833
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25833 }
+
+      - id: no-nhm-dom
+        title: Kartverket NHM DOM, 1 m surface
+        holds: >-
+          Norway's national surface model from lidar (Nasjonal høydemodell):
+          the height of whatever is on top, roofs and tree crowns, at 1 m,
+          asked of its coverage service (WCS) a 1 km square at a time in UTM
+          33, as GeoTIFF of about 4 MB.
+        licence: CC BY 4.0
+        notice: "© Kartverket, Nasjonal høydemodell DOM — CC BY 4.0"
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url:
+            - "https://wcs.geonorge.no/skwms1/wcs.hoyde-dom-nhm-25833?SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE=nhm_dom_topo_25833&FORMAT=GeoTIFF&CRS=EPSG:25833&WIDTH=1000&HEIGHT=1000&BBOX={tile}"
+            - "https://hoydedata.no/arcgis/services/NHM_DOM_25833/ImageServer/WCSServer?SERVICE=WCS&VERSION=1.0.0&REQUEST=GetCoverage&COVERAGE=nhm_dom_topo_25833&FORMAT=GeoTIFF&CRS=EPSG:25833&WIDTH=1000&HEIGHT=1000&BBOX={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "nhm_dom_33_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25833
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25833 }
+
+  EE:
+    name: Estonia
+    sources:
+      - id: ee-dtm
+        title: Maa- ja Ruumiamet DTM, 1 m terrain
+        holds: >-
+          Estonia's terrain model from lidar: the bare ground's height at
+          1 m, asked of its coverage service (WCS) a 1 km square at a time in
+          UTM 35, as GeoTIFF of about 4 MB.
+        licence: Maa- ja Ruumiamet open data licence (attribution)
+        notice: "Elevation data: Republic of Estonia Land and Spatial Development Board 2026 (https://geoportaal.maaruum.ee/opendata-licence)"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://teenus.maaamet.ee/ows/wcs-dtm?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=dtm-1&FORMAT=image/tiff&SUBSETTINGCRS=http://www.opengis.net/def/crs/EPSG/0/25835&OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/25835&SCALESIZE=x(1000),y(1000)&SUBSET=x({tile})"
+          tile: "{x},{x2})&SUBSET=y({y},{y2}"
+          file: "ee_dtm_35_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25835
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25835, nodata: 0 }
+
+      - id: ee-dsm
+        title: Maa- ja Ruumiamet DSM, 5 m surface
+        holds: >-
+          Estonia's surface model from lidar at 5 m: the height of whatever is
+          on top, roofs and tree crowns, asked of its coverage service (WCS) a
+          1 km square at a time in UTM 35.
+        licence: Maa- ja Ruumiamet open data licence (attribution)
+        notice: "Elevation data: Republic of Estonia Land and Spatial Development Board 2026 (https://geoportaal.maaruum.ee/opendata-licence)"
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 5
+        coverage: outline
+        find:
+          method: template
+          url: "https://teenus.maaamet.ee/ows/wcs-dsm?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=dsm-5&FORMAT=image/tiff&SUBSETTINGCRS=http://www.opengis.net/def/crs/EPSG/0/25835&OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/25835&SCALESIZE=x(200),y(200)&SUBSET=x({tile})"
+          tile: "{x},{x2})&SUBSET=y({y},{y2}"
+          file: "ee_dsm_35_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25835
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25835, nodata: 0 }
+
+  PL:
+    name: Poland
+    sources:
+      - id: pl-nmt
+        title: GUGiK NMT, 1 m terrain
+        holds: >-
+          Poland's terrain model from lidar (NMT): the bare ground's height at
+          1 m, asked of its coverage service (WCS) a 1 km square at a time in
+          UTM 34, as GeoTIFF of about 4 MB. Poland has no open surface model
+          as a raster of heights, so a cell keeps the clutter it has.
+        licence: Free reuse for any purpose (Polish Geodetic and Cartographic Law)
+        notice: "Źródło: Główny Urząd Geodezji i Kartografii (GUGiK), numeryczny model terenu"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://mapy.geoportal.gov.pl/wss/service/PZGIK/NMT/GRID1/WCS/DigitalTerrainModelFormatTIFF?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=DTM_PL-KRON86-NH_TIFF&FORMAT=image/tiff&SUBSETTINGCRS=http://www.opengis.net/def/crs/EPSG/0/25834&OUTPUTCRS=http://www.opengis.net/def/crs/EPSG/0/25834&SCALESIZE=x(1000),y(1000)&SUBSET=x({tile})"
+          tile: "{x},{x2})&SUBSET=y({y},{y2}"
+          file: "pl_nmt_34_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25834
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25834, nodata: 0 }
+
+  CZ:
+    name: Czechia
+    sources:
+      - id: cz-dmr5g
+        title: ČÚZK DMR 5G, 2 m terrain
+        holds: >-
+          Czechia's terrain model from lidar (DMR 5G, 2009 to 2013): the bare
+          ground's height at 2 m, asked of ČÚZK's image service a 1 km square
+          at a time in UTM 33, as GeoTIFF of about 1 MB.
+        licence: CC BY 4.0
+        notice: "© ČÚZK, DMR 5G — CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 2
+        coverage: outline
+        find:
+          method: template
+          url: "https://ags.cuzk.gov.cz/arcgis2/rest/services/dmr5g/ImageServer/exportImage?bboxSR=25833&imageSR=25833&size=500,500&format=tiff&pixelType=F32&noData=-9999&interpolation=RSP_BilinearInterpolation&f=image&bbox={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "cz_dmr5g_33_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25833
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25833, nodata: -9999 }
+
+      - id: cz-dmp1g
+        title: ČÚZK DMP 1G, 2 m surface
+        holds: >-
+          Czechia's surface model from lidar (DMP 1G, 2009 to 2013): the
+          height of whatever is on top, roofs and tree crowns, at 2 m, asked
+          of ČÚZK's image service a 1 km square at a time in UTM 33, as
+          GeoTIFF of about 1 MB.
+        licence: CC BY 4.0
+        notice: "© ČÚZK, DMP 1G — CC BY 4.0"
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 2
+        coverage: outline
+        find:
+          method: template
+          url: "https://ags.cuzk.gov.cz/arcgis2/rest/services/dmp1g/ImageServer/exportImage?bboxSR=25833&imageSR=25833&size=500,500&format=tiff&pixelType=F32&noData=-9999&interpolation=RSP_BilinearInterpolation&f=image&bbox={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "cz_dmp1g_33_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25833
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25833, nodata: -9999 }
+
+  ES:
+    name: Spain
+    sources:
+      - id: andalucia-mdt
+        title: Andalucía MDT, 1 m terrain
+        holds: >-
+          Andalusia's terrain model from lidar (REDIAM, PNOA-LiDAR flown 2020
+          and 2021): the bare ground's height at 1 m, as cloud-optimised
+          GeoTIFF in 2 km tiles of up to 10 MB. A build reads only its
+          rectangle, at a quarter of a cell.
+        licence: CC BY 4.0
+        notice: "REDIAM, Junta de Andalucía; PNOA-LiDAR © scne.es — CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://portalrediam.cica.es/descargas/public.php/dav/files/mxHMWXyHfrCxyNK/01_CARACTERIZACION_TERRITORIO/07_BASES_REF_ELEV/01_ELEVACIONES/01_PROYECTOS_REGIONALES/2020_AND_PNOA_LIDAR_V226_el/InfGeografica/InfRaster/MDT/ETRS89_h30_Horto/COG/2x2km_1m/{tile}_mdt_cog.tif"
+          tile: "{x}-{y}"
+          unit_m: 1000
+          size_m: 2000
+          corner: north-west
+          crs: EPSG:25830
+          missing: no-data
+        read: window
+        format: { type: geotiff, band: 1, crs: EPSG:25830, nodata: -32767 }
+
+      - id: andalucia-mds
+        title: Andalucía MDS, 1 m surface
+        holds: >-
+          Andalusia's surface model from lidar (REDIAM, PNOA-LiDAR flown 2020
+          and 2021): the height of whatever is on top, roofs and tree crowns,
+          at 1 m, as cloud-optimised GeoTIFF in 2 km tiles of about 21 MB. A
+          build reads only its rectangle, at a quarter of a cell.
+        licence: CC BY 4.0
+        notice: "REDIAM, Junta de Andalucía; PNOA-LiDAR © scne.es — CC BY 4.0"
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://portalrediam.cica.es/descargas/public.php/dav/files/mxHMWXyHfrCxyNK/01_CARACTERIZACION_TERRITORIO/07_BASES_REF_ELEV/01_ELEVACIONES/01_PROYECTOS_REGIONALES/2020_AND_PNOA_LIDAR_V226_el/InfGeografica/InfRaster/MDS/ETRS89_h30_Horto/COG/2x2km_1m/{tile}_mds_cog.tif"
+          tile: "{x}-{y}"
+          unit_m: 1000
+          size_m: 2000
+          corner: north-west
+          crs: EPSG:25830
+          missing: no-data
+        read: window
+        format: { type: geotiff, band: 1, crs: EPSG:25830, nodata: -32767 }
+
+      - id: catalunya-met
+        title: Catalunya MET, 1 m terrain
+        holds: >-
+          Catalonia's terrain model from lidar (ICGC, flown 2021 to 2023): the
+          bare ground's height at 1 m, one cloud-optimised GeoTIFF of 92 GB
+          for the whole region. A build reads only its rectangle, at a quarter
+          of a cell.
+        licence: CC BY 4.0
+        notice: "Institut Cartogràfic i Geològic de Catalunya (ICGC), model d'elevacions del terreny lidar 1 m 2021-2023 — CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: file
+          url: "https://datacloud.icgc.cat/datacloud/model-elevacions-terreny/tif_unzip/model-elevacions-terreny-lidar-catalunya-1m-2021-2023.tif"
+        read: window
+        format: { type: geotiff, band: 1, crs: EPSG:25831, nodata: -9999 }
+
+      - id: catalunya-ms
+        title: Catalunya MS, 1 m surface
+        holds: >-
+          Catalonia's surface model from lidar (ICGC, flown 2021 to 2023): the
+          height of whatever is on top, roofs and tree crowns, at 1 m, one
+          cloud-optimised GeoTIFF of 104 GB for the whole region. A build
+          reads only its rectangle, at a quarter of a cell.
+        licence: CC BY 4.0
+        notice: "Institut Cartogràfic i Geològic de Catalunya (ICGC), model de superfícies lidar 1 m 2021-2023 — CC BY 4.0"
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: file
+          url: "https://datacloud.icgc.cat/datacloud/model-superficies/tif_unzip/model-superficies-lidar-catalunya-1m-2021-2023.tif"
+        read: window
+        format: { type: geotiff, band: 1, crs: EPSG:25831, nodata: -9999 }
+
+      - id: navarra-mdt
+        title: Navarra MDT 2024, 2 m terrain
+        holds: >-
+          Navarre's terrain model from lidar (2024): the bare ground's height
+          at 2 m, asked of IDENA's coverage service (WCS) a 1 km square at a
+          time in UTM 30.
+        licence: CC BY 4.0
+        notice: "Servicio proporcionado por el Gobierno de Navarra (IDENA), MDT 2 m 2024 — CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 2
+        coverage: outline
+        find:
+          method: template
+          url: "https://idena.navarra.es/ogc/wcs?service=WCS&version=2.0.1&request=GetCoverage&CoverageId=IDENA.WCS__ELEVAC_Ras_MDT_2M&format=image/tiff&geotiff:compression=Deflate&subset=E({tile})"
+          tile: "{x},{x2})&subset=N({y},{y2}"
+          file: "navarra_mdt_30_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25830
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25830 }
+
+      - id: navarra-mds
+        title: Navarra MDS 2024, 2 m surface
+        holds: >-
+          Navarre's surface model from lidar (2024): the height of whatever is
+          on top, roofs and tree crowns, at 2 m, asked of IDENA's coverage
+          service (WCS) a 1 km square at a time in UTM 30.
+        licence: CC BY 4.0
+        notice: "Servicio proporcionado por el Gobierno de Navarra (IDENA), MDS 2 m 2024 — CC BY 4.0"
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 2
+        coverage: outline
+        find:
+          method: template
+          url: "https://idena.navarra.es/ogc/wcs?service=WCS&version=2.0.1&request=GetCoverage&CoverageId=IDENA.WCS__ELEVAC_Ras_MDS_2M&format=image/tiff&geotiff:compression=Deflate&subset=E({tile})"
+          tile: "{x},{x2})&subset=N({y},{y2}"
+          file: "navarra_mds_30_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25830
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25830 }
+
+      - id: galicia-mdt
+        title: Galicia MDT, 2 m terrain
+        holds: >-
+          Galicia's terrain model from lidar (PNOA 2009 and 2010): the bare
+          ground's height at 2 m, asked of the Xunta's image service a 1 km
+          square at a time in UTM 29, as GeoTIFF of about 1 MB. Galicia has no
+          open surface model, so a cell keeps the clutter it has.
+        licence: CC BY 4.0 compatible (Xunta de Galicia, aviso legal)
+        notice: "Xunta de Galicia, MDT 2 m PNOA 2009-2010 (mapas.xunta.gal/aviso-legal)"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 2
+        coverage: outline
+        find:
+          method: template
+          url: "https://ideg.xunta.gal/servizos/rest/services/Elevacions/Mdt2_PNOA09_10/ImageServer/exportImage?bboxSR=25829&imageSR=25829&size=500,500&format=tiff&pixelType=F32&noData=-9999&interpolation=RSP_NearestNeighbor&f=image&bbox={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "galicia_mdt_29_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25829
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25829, nodata: -9999 }
+
+  IT:
+    name: Italy
+    sources:
+      - id: bz-dtm
+        title: Südtirol DTM, 2.5 m terrain
+        holds: >-
+          South Tyrol's terrain model from lidar (the Province of Bolzano's,
+          2004 to 2013): the bare ground's height at 2.5 m, asked of its
+          coverage service (WCS) a 1 km square at a time in UTM 32.
+        licence: CC0 1.0
+        notice: "Autonome Provinz Bozen – Südtirol / Provincia autonoma di Bolzano – Alto Adige, DTM 2.5 m — CC0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 2.5
+        coverage: outline
+        find:
+          method: template
+          url: "https://geoservices9.civis.bz.it/geoserver/ows?service=WCS&version=2.0.1&request=GetCoverage&format=image/tiff&coverageId=p_bz-Elevation__DigitalTerrainModel-2.5m&subset=E({tile})"
+          tile: "{x},{x2})&subset=N({y},{y2}"
+          file: "bz_dtm25_32_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25832
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25832, nodata: -9999 }
+
+      - id: bz-dsm
+        title: Südtirol DSM, 2.5 m surface
+        holds: >-
+          South Tyrol's surface model from lidar (the Province of Bolzano's,
+          2004 to 2013): the height of whatever is on top, roofs and tree
+          crowns, at 2.5 m, asked of its coverage service (WCS) a 1 km square
+          at a time in UTM 32.
+        licence: CC0 1.0
+        notice: "Autonome Provinz Bozen – Südtirol / Provincia autonoma di Bolzano – Alto Adige, DSM 2.5 m — CC0"
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 2.5
+        coverage: outline
+        find:
+          method: template
+          url: "https://geoservices9.civis.bz.it/geoserver/ows?service=WCS&version=2.0.1&request=GetCoverage&format=image/tiff&coverageId=p_bz-Elevation__DigitalElevationModel-2.5m&subset=E({tile})"
+          tile: "{x},{x2})&subset=N({y},{y2}"
+          file: "bz_dsm25_32_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25832
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25832, nodata: -9999 }
+
+      - id: emilia-romagna-dtm
+        title: Emilia-Romagna DTM RER 2023-24, 1 m terrain
+        holds: >-
+          Emilia-Romagna's terrain model from its 2023 and 2024 lidar survey
+          (about 11 000 km² of the region): the bare ground's height, asked of
+          its coverage service (WCS) at 1 m a 1 km square at a time in UTM
+          32, as GeoTIFF of about 4 MB. The region publishes no open surface
+          model, so a cell keeps the clutter it has.
+        licence: CC BY 4.0
+        notice: "Regione Emilia-Romagna, DTM 0,5x0,5m RER 2023-24 — CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://servizigis.regione.emilia-romagna.it/wcs/dtmrer2023_24?service=WCS&version=1.0.0&request=GetCoverage&coverage=1&crs=EPSG:7791&resx=1&resy=1&format=GeoTIFF&bbox={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "er_dtm2324_32_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:7791
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:7791 }
+
+      - id: piemonte-dtm
+        title: Piemonte DTM ICE 2009-2011, 5 m terrain
+        holds: >-
+          Piedmont's terrain model from lidar (ICE 2009 to 2011): the bare
+          ground's height at 5 m, asked of its coverage service (WCS) a 1 km
+          square at a time in UTM 32. The region publishes no surface model
+          online, so a cell keeps the clutter it has.
+        licence: CC BY 4.0
+        notice: "Regione Piemonte, DTM 5 m Ripresa aerea ICE 2009-2011 — CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 5
+        coverage: outline
+        find:
+          method: template
+          url: "https://geomap.reteunitaria.piemonte.it/ws/taims/rp-01/taimsdtmwcs/wcs_ice_2009_2011_dtm?service=WCS&version=2.0.1&request=GetCoverage&coverageid=DTM&format=image/tiff&subset=x,http://www.opengis.net/def/crs/EPSG/0/32632({tile})"
+          tile: "{x},{x2})&subset=y,http://www.opengis.net/def/crs/EPSG/0/32632({y},{y2}"
+          file: "piemonte_dtm5_32_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:32632
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:32632, nodata: 0 }
+
+      - id: lombardia-dtm
+        title: Lombardia DTM, 5 m terrain
+        holds: >-
+          Lombardy's terrain model at 5 m (Regione Lombardia's DTM5): the bare
+          ground's height, asked of the region's image service a 1 km square
+          at a time in UTM 32. The region publishes no surface model, so a
+          cell keeps the clutter it has.
+        licence: CC BY 4.0 (Regione Lombardia's open data terms)
+        notice: "Regione Lombardia, DTM 5 m — CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 5
+        coverage: outline
+        find:
+          method: template
+          url: "https://www.cartografia.servizirl.it/arcgis2/rest/services/BaseMap/DTM5_RL_img/ImageServer/exportImage?bboxSR=32632&imageSR=32632&size=200,200&format=tiff&pixelType=F32&noData=-9999&interpolation=RSP_NearestNeighbor&f=image&bbox={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "lombardia_dtm5_32_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:32632
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:32632, nodata: -9999 }
+
+      - id: campania-dtm
+        title: Campania DTM 2020, 5 m terrain
+        holds: >-
+          Campania's terrain model at 5 m, from its 2020 regional technical
+          map: the bare ground's height, asked of the region's image service a
+          1 km square at a time in UTM 33. It is a terrain only, so a cell
+          keeps the clutter it has.
+        licence: CC BY 4.0
+        notice: "Regione Campania – Ufficio SIT, DTM 5 m CTR 2020 — CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 5
+        coverage: outline
+        find:
+          method: template
+          url: "https://geomaps.regione.campania.it/server/rest/services/DG5009/CTR2020_DTM5K_tif/ImageServer/exportImage?bboxSR=25833&imageSR=25833&size=200,200&format=tiff&pixelType=F32&noData=-9999&interpolation=RSP_NearestNeighbor&f=image&bbox={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "campania_dtm5_33_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25833
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25833, nodata: -9999 }
+
+      - id: sicilia-mdt
+        title: Sicilia MDT 2013, 2 m terrain
+        holds: >-
+          Sicily's terrain model at 2 m (the 2012 and 2013 regional flight):
+          the bare ground's height, asked of the region's image service a 1 km
+          square at a time in UTM 33. The region publishes no surface model,
+          so a cell keeps the clutter it has.
+        licence: CC BY 4.0
+        notice: "Regione Siciliana, S.I.T.R., MDT 2 m 2012-2013 — CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 2
+        coverage: outline
+        find:
+          method: template
+          url: "https://map.sitr.regione.sicilia.it/gis/rest/services/modelli_digitali/mdt_2013/ImageServer/exportImage?bboxSR=25833&imageSR=25833&size=500,500&format=tiff&pixelType=F32&noData=-9999&interpolation=RSP_NearestNeighbor&f=image&bbox={tile}"
+          tile: "{x},{y},{x2},{y2}"
+          file: "sicilia_mdt_33_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25833
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25833, nodata: -9999 }
+
+  MT:
+    name: Malta
+    sources:
+      - id: mt-dtm
+        title: Planning Authority DTM 2012, 1 m terrain
+        holds: >-
+          The Maltese Islands' terrain model from lidar (2012): the bare
+          ground's height at 1 m, asked of the Planning Authority's coverage
+          service (WCS) a 1 km square at a time in UTM 33, as GeoTIFF of about
+          4 MB. A square reaching past the survey's edge is refused, so the
+          outermost strip, mostly sea, keeps GLO-30.
+        licence: CC BY 4.0
+        notice: "© Planning Authority, Malta — Digital Terrain Model 2012, CC BY 4.0"
+        redistributable: true
+        layers: { terrain: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://malta.coverage.wetransform.eu/dtm_1m_2012/ows?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=dtm_1m_2012&FORMAT=image/tiff&SUBSET=E({tile})"
+          tile: "{x},{x2})&SUBSET=N({y},{y2}"
+          file: "mt_dtm2012_33_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25833
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25833, nodata: -999 }
+
+      - id: mt-dsm
+        title: Planning Authority DSM 2012, 1 m surface
+        holds: >-
+          The Maltese Islands' surface model from lidar (2012): the height of
+          whatever is on top, roofs and tree crowns, at 1 m, asked of the
+          Planning Authority's coverage service (WCS) a 1 km square at a time
+          in UTM 33, as GeoTIFF of about 4 MB.
+        licence: CC BY 4.0
+        notice: "© Planning Authority, Malta — Digital Surface Model 2012, CC BY 4.0"
+        redistributable: true
+        layers: { surface: 100 }
+        resolution_m: 1
+        coverage: outline
+        find:
+          method: template
+          url: "https://malta.coverage.wetransform.eu/dsm_1m_2012/ows?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID=dsm_1m_2012&FORMAT=image/tiff&SUBSET=E({tile})"
+          tile: "{x},{x2})&SUBSET=N({y},{y2}"
+          file: "mt_dsm2012_33_{x}_{y}.tif"
+          size_m: 1000
+          crs: EPSG:25833
+          missing: no-data
+        read: whole
+        format: { type: geotiff, band: 1, crs: EPSG:25833, nodata: -999 }
+
 north-america:
   US:
     name: United States

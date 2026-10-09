@@ -23,6 +23,7 @@ use tiff::tags::Tag;
 
 const TAG_MODEL_PIXEL_SCALE: u16 = 33550;
 const TAG_MODEL_TIEPOINT: u16 = 33922;
+const TAG_MODEL_TRANSFORMATION: u16 = 34264;
 const TAG_GEO_KEY_DIRECTORY: u16 = 34735;
 const GEOKEY_RASTER_TYPE: u16 = 1025;
 const RASTER_TYPE_POINT: u16 = 2;
@@ -184,6 +185,8 @@ pub struct CogReader<R: Read + Seek> {
     raw_palette: Option<RawPalette>,
     /// Set only for uncompressed strip images; see [`RawRows`].
     raw_rows: Option<RawRows>,
+    /// Each chunk's stored bytes, once asked (`empty_chunk`).
+    chunk_bytes: Option<Vec<u64>>,
 }
 
 impl CogReader<BufReader<File>> {
@@ -384,20 +387,39 @@ impl<R: Read + Seek> CogReader<R> {
             .dimensions()
             .map_err(|e| TerrainError::Cog(format!("dimensions: {e}")))?;
 
-        let scale = decoder
-            .get_tag_f64_vec(Tag::Unknown(TAG_MODEL_PIXEL_SCALE))
-            .map_err(|e| TerrainError::Cog(format!("ModelPixelScaleTag: {e}")))?;
-        let tie = decoder
-            .get_tag_f64_vec(Tag::Unknown(TAG_MODEL_TIEPOINT))
-            .map_err(|e| TerrainError::Cog(format!("ModelTiepointTag: {e}")))?;
-        if scale.len() < 2 || tie.len() < 6 {
-            return Err(TerrainError::Cog("geo tags too short".into()));
-        }
-        let (sx, sy) = (scale[0], scale[1]);
-        // Tiepoint: raster (i, j) ↔ world (x, y); north-up ⇒ dy negative.
-        let (ti, tj, tx, ty) = (tie[0], tie[1], tie[3], tie[4]);
-        let dx = sx;
-        let dy = -sy;
+        // Pixel scale and a tiepoint, or (GeoServer's and some ArcGIS
+        // coverage services' answers) a model transformation, which north-up
+        // and unrotated says the same: x = a·i + d, y = e·j + h.
+        let scale = decoder.get_tag_f64_vec(Tag::Unknown(TAG_MODEL_PIXEL_SCALE));
+        let tie = decoder.get_tag_f64_vec(Tag::Unknown(TAG_MODEL_TIEPOINT));
+        let (ti, tj, tx, ty, dx, dy) = match (scale, tie) {
+            (Ok(scale), Ok(tie)) => {
+                if scale.len() < 2 || tie.len() < 6 {
+                    return Err(TerrainError::Cog("geo tags too short".into()));
+                }
+                // Tiepoint: raster (i, j) ↔ world (x, y); north-up ⇒ dy negative.
+                (tie[0], tie[1], tie[3], tie[4], scale[0], -scale[1])
+            }
+            (scale, _) => {
+                let m = decoder
+                    .get_tag_f64_vec(Tag::Unknown(TAG_MODEL_TRANSFORMATION))
+                    .map_err(|e| {
+                        TerrainError::Cog(format!(
+                            "no ModelPixelScaleTag ({}) and no ModelTransformationTag: {e}",
+                            scale.err().map_or_else(String::new, |e| e.to_string())
+                        ))
+                    })?;
+                if m.len() < 16 {
+                    return Err(TerrainError::Cog("ModelTransformationTag too short".into()));
+                }
+                if m[1] != 0.0 || m[4] != 0.0 || m[0] <= 0.0 || m[5] >= 0.0 {
+                    return Err(TerrainError::Cog(
+                        "ModelTransformationTag rotates or flips the image".into(),
+                    ));
+                }
+                (0.0, 0.0, m[3], m[7], m[0], m[5])
+            }
+        };
 
         // GTRasterTypeGeoKey: Area (corner, default) vs Point (center).
         let pixel_is_point = decoder
@@ -436,6 +458,7 @@ impl<R: Read + Seek> CogReader<R> {
             cache_cap: 64,
             raw_palette: None,
             raw_rows: None,
+            chunk_bytes: None,
         })
     }
 
@@ -461,6 +484,15 @@ impl<R: Read + Seek> CogReader<R> {
         }
         let chunk = if self.raw_palette.is_some() {
             self.read_raw_chunk(idx)?
+        } else if self.empty_chunk(idx) {
+            // A chunk the file stores no bytes for (Norway's coverage service
+            // leaves those of a box with no data empty): no data. Read, it
+            // would decode whatever lies at offset 0, the file's header.
+            let cx = idx % self.chunks_across;
+            let cy = idx / self.chunks_across;
+            let this_w = self.meta.chunk_w.min(self.meta.width - cx * self.meta.chunk_w);
+            let this_h = self.meta.chunk_h.min(self.meta.height - cy * self.meta.chunk_h);
+            Chunk { data: Arc::new(vec![f32::NAN; (this_w * this_h) as usize]), row_w: this_w }
         } else {
             let cx = idx % self.chunks_across;
             let this_w = self.meta.chunk_w.min(self.meta.width - cx * self.meta.chunk_w);
@@ -489,6 +521,20 @@ impl<R: Read + Seek> CogReader<R> {
         }
         self.cache.insert(idx, chunk.clone());
         Ok(chunk)
+    }
+
+    /// Whether the image stores no bytes for a chunk: its byte count 0, read
+    /// once per reader, from the image it reads (an overview's own).
+    fn empty_chunk(&mut self, idx: u32) -> bool {
+        if self.chunk_bytes.is_none() {
+            let tag = if self.decoder.get_tag(Tag::TileWidth).is_ok() {
+                Tag::TileByteCounts
+            } else {
+                Tag::StripByteCounts
+            };
+            self.chunk_bytes = Some(self.decoder.get_tag_u64_vec(tag).unwrap_or_default());
+        }
+        self.chunk_bytes.as_ref().and_then(|c| c.get(idx as usize)) == Some(&0)
     }
 
     /// Raw path for palette images: seek + read + inflate one chunk.
@@ -950,6 +996,21 @@ mod tests {
         value: impl Fn(u32, u32) -> f32,
         pixel_is_point: bool,
     ) -> Vec<u8> {
+        build_tiff_with(width, height, rows_per_strip, value, pixel_is_point, None, false)
+    }
+
+    /// As `build_tiff`, one strip stored as no bytes at offset 0 when
+    /// `empty` names it, and georeferenced by a ModelTransformationTag in
+    /// place of scale and tiepoint when `transformation`.
+    fn build_tiff_with(
+        width: u32,
+        height: u32,
+        rows_per_strip: u32,
+        value: impl Fn(u32, u32) -> f32,
+        pixel_is_point: bool,
+        empty: Option<u32>,
+        transformation: bool,
+    ) -> Vec<u8> {
         let mut out: Vec<u8> = Vec::new();
         out.extend_from_slice(&[0x49, 0x49, 42, 0]); // II, magic
         out.extend_from_slice(&[0u8; 4]); // IFD offset patched later
@@ -959,6 +1020,11 @@ mod tests {
         let mut strip_offsets = Vec::new();
         let mut strip_counts = Vec::new();
         for s in 0..n_strips {
+            if empty == Some(s) {
+                strip_offsets.push(0);
+                strip_counts.push(0);
+                continue;
+            }
             strip_offsets.push(out.len() as u32);
             let rows = rows_per_strip.min(height - s * rows_per_strip);
             for r in 0..rows {
@@ -998,6 +1064,12 @@ mod tests {
             off
         };
 
+        // The same 10 m pixels from (1000, 2000), as a matrix.
+        let m_off = put_f64s(&mut out, &[
+            10.0, 0.0, 0.0, 1000.0, 0.0, -10.0, 0.0, 2000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            1.0,
+        ]);
+
         // IFD.
         let ifd_off = out.len() as u32;
         let mut entries: Vec<(u16, u16, u32, u32)> = vec![
@@ -1015,6 +1087,10 @@ mod tests {
             (TAG_MODEL_TIEPOINT, 12, 6, tie_off),
             (TAG_GEO_KEY_DIRECTORY, 3, 8, gk_off),
         ];
+        if transformation {
+            entries.retain(|e| e.0 != TAG_MODEL_PIXEL_SCALE && e.0 != TAG_MODEL_TIEPOINT);
+            entries.push((TAG_MODEL_TRANSFORMATION, 12, 16, m_off));
+        }
         entries.sort_by_key(|e| e.0);
         let mut ifd = Vec::new();
         ifd.extend_from_slice(&(entries.len() as u16).to_le_bytes());
@@ -1033,6 +1109,25 @@ mod tests {
 
     fn ramp(c: u32, r: u32) -> f32 {
         (c * 100 + r) as f32
+    }
+
+    #[test]
+    fn a_chunk_stored_as_no_bytes_is_no_data() {
+        let bytes = build_tiff_with(6, 8, 4, ramp, false, Some(1), false);
+        let mut cog = CogReader::from_reader(Cursor::new(bytes)).unwrap();
+        assert_eq!(cog.pixel(2, 1).unwrap(), ramp(2, 1));
+        assert!(cog.pixel(2, 5).unwrap().is_nan());
+    }
+
+    #[test]
+    fn a_model_transformation_places_the_image_as_scale_and_tiepoint_do() {
+        let plain = *CogReader::from_reader(Cursor::new(build_tiff(6, 8, 4, ramp, false)))
+            .unwrap()
+            .meta();
+        let bytes = build_tiff_with(6, 8, 4, ramp, false, None, true);
+        let mut cog = CogReader::from_reader(Cursor::new(bytes)).unwrap();
+        assert_eq!(*cog.meta(), plain);
+        assert_eq!(cog.pixel(3, 2).unwrap(), ramp(3, 2));
     }
 
     #[test]

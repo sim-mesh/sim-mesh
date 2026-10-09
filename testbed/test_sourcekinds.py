@@ -452,3 +452,40 @@ def test_a_host_that_refuses_head_is_asked_for_two_bytes(tmp_path):
             await runner.cleanup()
     assert asyncio.run(go()) == 5000
     assert asked == [("HEAD", None), ("GET", "bytes=0-1")]
+
+
+def test_a_coverage_services_exception_page_is_no_data_there(tmp_path):
+    async def ows(request):
+        if request.query.get("box") == "in":
+            return web.Response(body=b"II*\0tiff", content_type="image/tiff")
+        if request.query.get("box") == "json":
+            return web.Response(body=b'{"error":{"code":400}}', content_type="image/tiff")
+        status = 400 if request.query.get("box") == "out400" else 200
+        return web.Response(status=status, text="<ows:ExceptionReport/>",
+                            content_type="text/xml")
+
+    async def go():
+        app = web.Application()
+        app.router.add_get("/ows", ows)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = "http://127.0.0.1:%d" % runner.addresses[0][1]
+        got = []
+        try:
+            async with aiohttp.ClientSession() as session:
+                cache = sources.Cache(session, str(tmp_path / "cache"))
+                for box in ("in", "out200", "out400", "json"):
+                    f = sources.File("no-nhm-dtm", base + "/ows?box=" + box, box + ".tif")
+                    f.raster = True
+                    got.append(await cache.fetch(f))
+        finally:
+            await runner.cleanup()
+        return got
+    got = asyncio.run(go())
+    assert got[0] and open(got[0], "rb").read() == b"II*\0tiff"
+    assert got[1:] == [None, None, None]
+    # Asked of a template, a GeoTIFF source's file is one.
+    [f] = sources.template_files(SHIPPED["no-nhm-dtm"], [5.31, 60.39, 5.311, 60.391])
+    assert f.raster

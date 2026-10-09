@@ -90,7 +90,12 @@ META_MAX_AGE_S = 7 * 86400          # a feed or an index kept this long unless t
 HEAD_PARALLEL = 6
 HEAD_REFUSED = (401, 403, 405)      # a host answering these to HEAD is asked for two bytes
 ARCGIS_PAGE = 2000                  # features an ArcGIS layer is asked for at a time
-ZIP_TAIL = 1 << 16                  # a remote zip's last bytes, read for its directory's end
+# What a host sends in place of a raster it does not have: an exception
+# report or an error page.
+PAGE_TYPES = ("text/xml", "application/xml", "application/vnd.ogc.se_xml", "text/html",
+              "text/plain", "application/json")
+TIFF_MAGIC = (b"II*\0", b"MM\0*", b"II+\0", b"MM\0+")    # classic and BigTIFF
+ZIP_TAIL = 1 << 16                 # a remote zip's last bytes, read for its directory's end
 INTERMEDIATES = os.path.join(sourcefile.SIM_MESH_ROOT, "sources", "intermediates.pem")
 MAX_CELLS = 25_000_000              # a grid past this is refused: rasters are held whole
 RESOLUTIONS = (30.0, 10.0)
@@ -128,6 +133,9 @@ class File:
         # method, csize, size, offset} as the archive's central directory
         # lists it, fetched alone by range.
         self.member = member
+        # A GeoTIFF asked of a template (a coverage service's box): a page
+        # in its place is no data there.
+        self.raster = False
         self.urls = list(url) if isinstance(url, (list, tuple)) else [url]
         self.sha256 = sha256            # what the index says the file is, checked on arrival
         # A window of a cloud-optimised GeoTIFF: {box, want}, the box in the
@@ -297,8 +305,10 @@ def template_files(source, hull, res_m=30.0):
         urls = [u.replace("{tile}", tile) for u in source.addresses("url")]
         kept = tile_name_xy(source, a, b, source.find["file"]) if source.find.get("file") \
             else urls[0].rsplit("/", 1)[-1]
-        out.append(File(source.id, urls, kept, source.members(), missing=_missing(source),
-                        window=dict(window) if window else None))
+        f = File(source.id, urls, kept, source.members(), missing=_missing(source),
+                 window=dict(window) if window else None)
+        f.raster = source.format_type == "geotiff" and not source.format.get("members")
+        out.append(f)
     return out
 
 
@@ -546,7 +556,7 @@ def window_want(source, res_m):
     units of the source's system."""
     if source.read != "window":
         return None
-    return float(res_m) / 4.0 * crs.per_metre(source.find.get("crs") or "EPSG:4326")
+    return float(res_m) / 4.0 * crs.per_metre(sourcefile.crs_of(source))
 
 
 def index_files(source, features, bbox, res_m=30.0):
@@ -572,12 +582,21 @@ def index_files(source, features, bbox, res_m=30.0):
     return out
 
 
-def single_file(source):
+def single_file(source, hull=None, res_m=30.0):
+    """A `file` source's one file; read as a window (Catalonia's
+    region-wide cloud-optimised GeoTIFFs), with the box it needs of it for
+    the degrees `hull`."""
     urls = source.addresses("url")
     base = urls[0].rsplit("/", 1)[-1]
     name = base if PLAIN_NAME_RE.match(base) else \
         source.id + ("." + base.rsplit(".", 1)[1] if "." in base else "")
-    return File(source.id, urls, name, source.members(), missing=_missing(source))
+    window = None
+    want = window_want(source, res_m)
+    if want and hull is not None:
+        system = sourcefile.crs_of(source)
+        window = {"box": crs.box_in(system, hull, margin=4 * float(res_m) * crs.per_metre(system)),
+                  "want": want}
+    return File(source.id, urls, name, source.members(), missing=_missing(source), window=window)
 
 
 def _missing(source):
@@ -865,6 +884,10 @@ class Cache:
         try:
             if resp.status == 404:
                 return None
+            if f.raster and resp.status in (200, 400) and resp.content_type in PAGE_TYPES:
+                # A coverage service asked outside its extent answers with an
+                # exception page, 200 (Norway's) or 400 (Estonia's): no data.
+                return None
             if resp.status == 416 and start:
                 os.replace(part, path)
                 return path
@@ -882,6 +905,14 @@ class Cache:
             raise SourceError("%s: %s" % (url, err or type(err).__name__)) from err
         finally:
             resp.release()
+        if f.raster:
+            with open(part, "rb") as handle:
+                magic = handle.read(4)
+            if magic not in TIFF_MAGIC:
+                # An error a coverage service sends as its image (Galicia's
+                # JSON, labelled image/tiff): no data there.
+                os.remove(part)
+                return None
         if f.sha256:
             digest = hashlib.sha256()
             with open(part, "rb") as handle:
@@ -1608,7 +1639,7 @@ async def plan(cache, spec, sizes=True, sources=None):
             extract = {"id": feature["properties"]["id"],
                        "name": feature["properties"].get("name")}
         else:
-            found = [single_file(source)]
+            found = [single_file(source, hull, spec.get("res_m", 30))]
         if not found:
             continue
         files[source.id] = found

@@ -139,9 +139,17 @@ UTM_FALSE_EASTING = 500000.0
 UTM_FALSE_NORTHING_SOUTH = 10000000.0
 
 
+# National systems that are a UTM zone on GRS80 under a code of their own:
+# Italy's RDN2008 (EPSG:7791/7792, 6707/6708), Sweden's SWEREF99 TM, Finland's
+# ETRS-TM35FIN.
+UTM_ALIASES = {7791: 32, 7792: 33, 6707: 32, 6708: 33, 3006: 33, 3067: 35}
+
+
 def utm_zone_of(epsg):
     """(zone, north, ellipsoid) for an EPSG code this module can project to."""
     epsg = int(epsg)
+    if epsg in UTM_ALIASES:
+        return UTM_ALIASES[epsg], True, GRS80
     for base, north, ellipsoid, last in ((32600, True, WGS84, 60), (32700, False, WGS84, 60),
                                          (25800, True, GRS80, 60), (26900, True, GRS80, 23)):
         zone = epsg - base

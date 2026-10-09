@@ -49,7 +49,8 @@ sys.path.insert(0, HERE)
 import crs as crs_module  # noqa: E402
 import store  # noqa: E402
 
-KNOWN_CRS = "EPSG:4326, 4269, UTM 326zz/327zz/258zz/269zz, 3035, 5070, 28992, 7415"
+KNOWN_CRS = ("EPSG:4326, 4269, UTM 326zz/327zz/258zz/269zz and 7791/7792/6707/6708/3006/3067, "
+             "3035, 5070, 28992, 7415")
 SIM_MESH_ROOT = os.path.dirname(HERE)
 SHIPPED = os.path.join(SIM_MESH_ROOT, "sources", "sources.yaml")
 OWN = os.path.join(store.SIM_DIR, "sources.yaml")
@@ -197,6 +198,9 @@ def _entries(data, path):
         if not isinstance(value, dict):
             raise _fault(path, None, "a continent is a mapping of countries")
         for code, country in value.items():
+            if isinstance(code, bool):
+                raise _fault(path, None, "%s: a country code YAML reads as %s: quote it (\"NO\")"
+                             % (key, code))
             if not COUNTRY_RE.match(str(code)):
                 raise _fault(path, None, "%s: a country is its ISO 3166-1 alpha-2 code, not %r"
                              % (key, code))
@@ -251,8 +255,12 @@ def _check(source):
     if "pairs_with" in e and not (e["format"]["type"] == "geotiff"
                                   and set(e["layers"]) == {"surface"}):
         raise _fault(path, ident, "pairs_with is a GeoTIFF surface's, naming its XYZ terrain")
-    if e["read"] == "window" and e["find"]["method"] not in ("index", "template"):
-        raise _fault(path, ident, "a window is read of the files an index or a template finds")
+    if e["read"] == "window" and e["find"]["method"] not in ("index", "template", "file"):
+        raise _fault(path, ident, "a window is read of the files an index, a template or a "
+                                  "file finds")
+    if e["read"] == "window" and not set(e["layers"]) <= {"terrain", "surface"}:
+        raise _fault(path, ident, "a window is read of a terrain or a surface, which the "
+                                  "compiler samples where it has data")
 
 
 def _check_find(source):
