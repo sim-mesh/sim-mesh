@@ -432,6 +432,8 @@ struct State {
     /// The earliest event on Python's heap, None when it is empty.
     due: Option<i64>,
     closed: bool,
+    /// The grant trace (`trace_to`, a diagnostic): None unless asked for.
+    trace: Option<std::io::LineWriter<std::fs::File>>,
     // ---- instrumentation (Phase A, gated by `Core.counters_on`) ---------
     /// Datagrams off the wire, by what `datagram` found them to be.
     dg_idle: i64,
@@ -523,6 +525,18 @@ impl State {
         })
     }
 
+    /// One line of the grant trace at T, when there is one: T, what, the
+    /// station, and what about it.
+    fn trace(&mut self, sid: i64, what: &str, detail: &str) {
+        use std::io::Write;
+        let t = self.t;
+        if let Some(w) = self.trace.as_mut() {
+            let line = format!("{}.{:06}\t{}\t{}\t{}\n", t.div_euclid(1_000_000),
+                               t.rem_euclid(1_000_000), what, sid, detail);
+            let _ = w.write_all(line.as_bytes());
+        }
+    }
+
     /// A message's number and T, up to the datagram: the station owes an idle
     /// for `seq`.
     fn grant(&mut self, sid: i64, t: Option<i64>) -> Option<(i64, i64)> {
@@ -534,6 +548,9 @@ impl State {
         let t = t.unwrap_or(now);
         st.told = st.told.max(t);
         self.mark(sid, false);
+        if self.trace.is_some() {
+            self.trace(sid, "grant", &format!("{} {}", seq, t));
+        }
         Some((seq, t))
     }
 }
@@ -761,6 +778,14 @@ impl Core {
                 _ => {}
             }
         }
+        {
+            let mut s = self.s.borrow_mut();
+            if s.trace.is_some() {
+                let sid = parsed.as_ref().and_then(|v| v.get("sid")).and_then(as_int).unwrap_or(-1);
+                let text = String::from_utf8_lossy(&data[..data.len().min(160)]).into_owned();
+                s.trace(sid, "in", &text);
+            }
+        }
         self.call(py, "_core_datagram", (PyBytes::new_bound(py, data), addr_tuple(py, addr)))
             .map(|_| ())
     }
@@ -776,6 +801,9 @@ impl Core {
         {
             let mut s = self.s.borrow_mut();
             let t = s.t;
+            if s.trace.is_some() {
+                s.trace(sid, "idle", &format!("{} {:?}", seq, until));
+            }
             let Some(st) = s.stations.get_mut(&sid) else { return Ok(()) };
             if seq < st.seq {
                 // Once is the ordinary race, an idle crossing the next message
@@ -857,6 +885,10 @@ impl Core {
             let mut said = None;
             if !missed.is_empty() {
                 s.resends += missed.len() as i64;
+                if s.trace.is_some() {
+                    let n = missed.len().to_string();
+                    s.trace(sid, "resend", &n);
+                }
                 said = Some(format!(
                     "station {} missed {} message(s) after {}; sending them again",
                     sid,
@@ -1091,6 +1123,7 @@ impl Core {
                 standing: 0,
                 due: None,
                 closed: false,
+                trace: None,
                 dg_idle: 0,
                 dg_state: 0,
                 dg_tx: 0,
@@ -1500,12 +1533,25 @@ impl Core {
         s.grant(sid, t)
     }
 
+    /// The grant trace, a diagnostic, to `path` from now on: every message's
+    /// number and T, every idle, every datagram handed to Python and every
+    /// run Python sends, a line each at T. The run itself is the same with
+    /// it or without it.
+    fn trace_to(&self, path: &str) -> PyResult<()> {
+        let file = std::fs::File::create(path)?;
+        self.s.borrow_mut().trace = Some(std::io::LineWriter::new(file));
+        Ok(())
+    }
+
     /// The datagram `grant` numbered: kept for a resend, and sent.
     fn post(&self, sid: i64, seq: i64, data: &[u8], run: bool) -> PyResult<()> {
         let addr = {
             let mut s = self.s.borrow_mut();
             if run {
                 s.runs += 1;
+                if s.trace.is_some() {
+                    s.trace(sid, "post", &String::from_utf8_lossy(data));
+                }
             }
             let advancing = s.advancing;
             let Some(st) = s.stations.get_mut(&sid) else {

@@ -2504,6 +2504,11 @@ class CoreEther(Ether):
         self.expected = _Expected(self.core)
         self.transport = _CoreTransport(self)
         self.loop.add_reader(self.core.wake_fd, self.core.pump)
+        if os.environ.get("ETHER_CORE_TRACE", "") not in ("", "0") and record_path:
+            # A diagnostic, off unless asked for: every grant, idle and
+            # datagram for Python at T, in grants.tsv beside the record.
+            self.core.trace_to(os.path.join(os.path.dirname(os.path.abspath(record_path)),
+                                            "grants.tsv"))
 
     holds = property(lambda self: self.core.holds,
                      lambda self, n: setattr(self.core, "holds", n))
