@@ -2069,9 +2069,12 @@ def test_a_tcp_write_waits_for_its_reader_and_holds_t_until_it_is_read(conductor
         idle(a, 2, 20_000)
         a.expect_nothing(0.3)
         b.send({"type": "read", "ch": A_TO_B, "n": 10})
-        # b is at work on them, at the T it has.
-        run = b.expect("run")
-        assert run["t"] == 10_000
+        # b is at work on them, at the T it has, and owes an idle for that
+        # work: its report is it speaking. Nothing is sent to it for the
+        # purpose (a message would land in the middle of the work), and T
+        # moves once it has said it.
+        b.expect_nothing(0.2)
+        a.expect_nothing(0.1)
         idle(b, run["seq"], None)
         assert a.expect("run")["t"] == 20_000
     finally:
@@ -2263,8 +2266,11 @@ def test_a_line_typed_at_a_station_waits_for_it_to_have_t_and_holds_t_until_read
         assert synced == [1_000_000]
         assert ether.busy()                     # twelve bytes it has not read
         bed.send({"type": "read", "ch": "tty", "total": 12})
-        run = await bed.recv()
-        assert run["type"] == "run" and run["t"] == 1_000_000
+        # At work on the line, at the T it has: its report is it speaking, so
+        # it owes an idle, and nothing is sent to it for that (a message would
+        # land in the middle of the work).
+        await asyncio.sleep(0.05)
+        assert ether.busy()
         bed.send({"type": "idle", "seq": run["seq"], "until": None})
         await asyncio.sleep(0.05)
         assert not ether.busy()
