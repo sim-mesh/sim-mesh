@@ -13,7 +13,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <sys/syscall.h>
 #include <sys/timerfd.h>
@@ -39,9 +41,11 @@ constexpr long kResendNs = 250 * 1000 * 1000;
 /* Strict time (SIM_MESH_STRICT_TIME=1): the busy grace never answers for a
  * station still at work. Without it, a station busy past the grace in wall
  * time (a proof of work, a spin) has T moved under it by however long this
- * host took, and two runs of one package part there. With it, T waits until
- * the station's tasks all block; one that never does stops the run, and says
- * so every kStrictSayS of wall time. */
+ * host took, and two runs of one package part there. With it, the grace
+ * answers only once none of the station's threads is running: one asleep in
+ * a wait the census cannot see is idle, and is answered as before, at the
+ * same T whenever the host gets to it. A thread that never stops running
+ * stops the run, and says so every kStrictSayS of wall time. */
 constexpr long kStrictSayS = 10;
 
 std::atomic<int>     s_mode{-1};
@@ -226,13 +230,38 @@ bool strictTime()
     return on;
 }
 
-/* Strict time, a station still at work: look again kStrictSayS on. */
+/* Strict time, a station still at work: look again a grace on. */
 void armStrictLook()
 {
     if (s_tfd < 0) return;
     struct itimerspec its = {};
-    its.it_value.tv_sec = kStrictSayS;
+    its.it_value.tv_nsec = kBusyGraceNs;
     timerfd_settime(s_tfd, 0, &its, nullptr);
+}
+
+/* Is any thread of this station but the asking one running, or ready to?
+ * /proc's state R; a thread asleep, in any wait, is not at work. */
+bool othersRunning()
+{
+    pid_t self = (pid_t)syscall(SYS_gettid);
+    DIR* d = opendir("/proc/self/task");
+    if (!d) return true;   /* cannot tell: hold T, as strict time does */
+    bool any = false;
+    while (struct dirent* e = readdir(d)) {
+        if (e->d_name[0] < '0' || e->d_name[0] > '9' || atoi(e->d_name) == self) continue;
+        char path[300], buf[512];
+        snprintf(path, sizeof path, "/proc/self/task/%s/stat", e->d_name);
+        int fd = open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+        ssize_t n = read(fd, buf, sizeof buf - 1);
+        close(fd);
+        if (n <= 0) continue;
+        buf[n] = 0;
+        const char* r = strrchr(buf, ')');   /* the name may hold spaces and parentheses */
+        if (r && r[1] == ' ' && r[2] == 'R') { any = true; break; }
+    }
+    closedir(d);
+    return any;
 }
 
 /* After an idle: the timer says it again kResendNs on unless the ether has
@@ -260,11 +289,14 @@ void* watchdogMain(void*)
     for (;;) {
         uint64_t n;
         if (read(s_tfd, &n, sizeof n) != (ssize_t)sizeof n) continue;
-        if (strictTime() && s_owed.load()) {
-            int64_t busy = (rawWallUs() - s_armedUs.load()) / 1000000;
-            if (busy >= kStrictSayS)
+        if (strictTime() && s_owed.load() && othersRunning()) {
+            static int64_t said = 0;
+            int64_t now = rawWallUs(), busy = (now - s_armedUs.load()) / 1000000;
+            if (busy >= kStrictSayS && now - said >= kStrictSayS * 1000000) {
+                said = now;
                 B()->log(SIMRADIO_LOG_WARN, "conductor: at work %lld s of wall time on one grant, "
                          "and strict time holds T for it", (long long)busy);
+            }
             armStrictLook();
             continue;
         }
