@@ -52,8 +52,13 @@ constexpr long kStrictSayS = 10;
  * the clock to move (readNowUs). Handling a packet or an event reads the clock
  * a few times, and at a thousand a working loop of reticulum's stations
  * already reached it in a city run; a loop that waits on the clock reaches a
- * hundred thousand in a fraction of a second of the host's time. */
+ * hundred thousand in a fraction of a second of the host's time. Once a
+ * thread has been found so, kSpinStepReads reads of each next instant are
+ * enough while it goes on waiting there: each step of T costs the run a
+ * barrier, and a hundred thousand reads a step made a tool waiting on the
+ * wall clock give up on a station mid-turn. */
 constexpr int kSpinReads = 100000;
+constexpr int kSpinStepReads = 1000;
 
 std::atomic<int>     s_mode{-1};
 std::atomic<int64_t> s_T{0};
@@ -67,7 +72,8 @@ std::atomic<int64_t> s_armedUs{0};         /* wall clock when the busy grace was
 std::atomic<int64_t> s_until{kNever};
 std::atomic<int64_t> s_chipNext{kNever};   /* the earliest armed timer, in T */
 std::atomic<int64_t> s_lastUntil{kNever};
-void               (*s_sendIdle)(uint64_t, int64_t) = nullptr;
+void               (*s_sendIdle)(uint64_t, int64_t, uint64_t) = nullptr;
+std::atomic<uint64_t> s_idleN{0};          /* idles said; one said again keeps its number */
 std::atomic<void (*)(void)> s_onAdvance{nullptr};
 std::atomic<bool>    s_holding{false};  /* a datagram is being applied (hold) */
 bool                 s_hookOwed = false; /* T moved during it; under B()->lock() */
@@ -286,7 +292,8 @@ void armResend()
 void sendIdleNow(int64_t until)
 {
     s_lastUntil.store(until);
-    if (s_sendIdle) s_sendIdle(s_seq.load(), until);
+    uint64_t n = s_idleN.fetch_add(1) + 1;
+    if (s_sendIdle) s_sendIdle(s_seq.load(), until, n);
 }
 
 void* watchdogMain(void*)
@@ -312,7 +319,7 @@ void* watchdogMain(void*)
             sendIdleNow(s_until.load());
             armResend();
         } else if (s_resending.load()) {
-            if (s_sendIdle) s_sendIdle(s_seq.load(), s_lastUntil.load());
+            if (s_sendIdle) s_sendIdle(s_seq.load(), s_lastUntil.load(), s_idleN.load());
             armResend();
         }
     }
@@ -352,8 +359,11 @@ void startWatchdog()
  * kSpinReads-th read of one instant first sleeps the shortest sleep there is,
  * which the time shim ends at the next instant a wait can end on: the next
  * whole millisecond of node time, or the chips' next event before it with
- * SIM_MESH_SHORT_WAITS=chip. When a thread waits, and what it reads, then
- * follow from its own reads alone, never from the host's pace: work that
+ * SIM_MESH_SHORT_WAITS=chip. While each of its instants ends in such a
+ * sleep, kSpinStepReads reads of the next one do too; one that ends any other
+ * way (the thread waited elsewhere) takes kSpinReads again. When a thread
+ * waits, and what it reads, then follow from its own reads alone, never from
+ * the host's pace: work that
  * reads the clock fewer times at one instant takes no time of T's, as before,
  * and work that never reads it holds T until it is done. The thread that
  * applies the ether's grants never sleeps here, since only it moves T. */
@@ -363,12 +373,14 @@ int64_t readNowUs()
     if (!strictTime() || !isVirtual() || t_grants || !s_joined.load()) return now;
     static thread_local int64_t last = -1;
     static thread_local int same = 0;
+    static thread_local bool waiting = false;   /* its last instant ended in a sleep here */
     if (now != last) {
         last = now;
         same = 0;
+        waiting = false;
         return now;
     }
-    if (++same < kSpinReads) return now;
+    if (++same < (waiting ? kSpinStepReads : kSpinReads)) return now;
     same = 0;              /* the log below reads the clock too */
     static thread_local bool said = false;
     if (!said) {
@@ -382,6 +394,7 @@ int64_t readNowUs()
     if (now != last) {
         last = now;
         same = 0;
+        waiting = true;
     } else {
         same = kSpinReads - 1;   /* a signal ended the sleep: the next read sleeps again */
     }
@@ -599,7 +612,7 @@ uint64_t lastSeq() { return s_seq.load(); }
 void resendIdle()
 {
     if (!isVirtual() || !s_joined.load() || !s_sendIdle) return;
-    s_sendIdle(s_seq.load(), s_lastUntil.load());
+    s_sendIdle(s_seq.load(), s_lastUntil.load(), s_idleN.load());
 }
 
 int wakeCreate(void (*due)(void*), void* arg)
@@ -634,7 +647,7 @@ void idle()
     }
 }
 
-void setIdleSender(void (*send)(uint64_t, int64_t))
+void setIdleSender(void (*send)(uint64_t, int64_t, uint64_t))
 {
     s_sendIdle = send;
 }

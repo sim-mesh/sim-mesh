@@ -345,7 +345,8 @@ def test_the_shim_counts_console_and_tcp_bytes_and_waits_to_write():
 # With SIM_MESH_STRICT_TIME=1, T moves only when the station is idle, and a
 # thread that waits for time by reading the clock in a loop never is. Its
 # 100 000th read of one instant sleeps the shortest sleep there is, which ends
-# on the next whole millisecond of node time: the loop sees T move a
+# on the next whole millisecond of node time, and while it goes on waiting so
+# its 1 000th read of each next instant does: the loop sees T move a
 # millisecond at a time, at a cost in reads that is the loop's own, never the
 # host's pace.
 
@@ -386,6 +387,7 @@ def test_under_strict_time_a_busy_wait_on_the_clock_moves_t_by_the_millisecond()
     untils, done = spin(SIM_MESH_STRICT_TIME="1")
     assert untils == [1000 * i for i in range(1, 7)]
     # The read that slept from 5 ms returned 6 ms, the first past 5.3 ms: one
-    # read at the welcome's instant, then 100 000 per millisecond.
-    assert done == [["done", "6000", str(1 + 6 * 100_000)]]
+    # read at the welcome's instant, 100 000 to the first millisecond, then
+    # 1 000 per millisecond.
+    assert done == [["done", "6000", str(1 + 100_000 + 5 * 1_000)]]
     assert spin(SIM_MESH_STRICT_TIME="1") == (untils, done)

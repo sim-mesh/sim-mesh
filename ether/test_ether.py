@@ -1820,6 +1820,24 @@ def test_an_idle_said_twice_counts_once(conductor):
     a.expect_nothing(0.3)
 
 
+def test_a_copy_of_the_idle_taken_is_nothing(conductor):
+    """A station's conductor says its last idle again, on the wall clock,
+    until something comes back, and each idle carries its own number `n`,
+    which a copy keeps. A copy crossing what the station said after that idle
+    would pass for an idle at a moment the host chose: it is nothing, and the
+    idle said next is the one that counts."""
+    a, b = conductor(1), conductor(2)
+    join_virtual(a)
+    join_virtual(b)
+    a.send({"type": "idle", "seq": 1, "until": 5_000, "n": 1})
+    a.state("RX")
+    a.send({"type": "idle", "seq": 1, "until": 5_000, "n": 1})     # the copy
+    idle(b, 1, None)
+    a.expect_nothing(0.3)
+    a.send({"type": "idle", "seq": 1, "until": 5_000, "n": 2})
+    assert a.expect("run") == {"type": "run", "seq": 2, "t": 5_000}
+
+
 def test_anything_a_station_says_retracts_its_idle(conductor):
     a, b = conductor(1), conductor(2)
     join_virtual(a)
