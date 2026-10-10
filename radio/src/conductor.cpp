@@ -36,6 +36,14 @@ constexpr long kBusyGraceNs = 20 * 1000 * 1000;
  * (resendIdle in the header). */
 constexpr long kResendNs = 250 * 1000 * 1000;
 
+/* Strict time (SIM_MESH_STRICT_TIME=1): the busy grace never answers for a
+ * station still at work. Without it, a station busy past the grace in wall
+ * time (a proof of work, a spin) has T moved under it by however long this
+ * host took, and two runs of one package part there. With it, T waits until
+ * the station's tasks all block; one that never does stops the run, and says
+ * so every kStrictSayS of wall time. */
+constexpr long kStrictSayS = 10;
+
 std::atomic<int>     s_mode{-1};
 std::atomic<int64_t> s_T{0};
 std::atomic<int64_t> s_epoch{0};
@@ -44,6 +52,7 @@ std::atomic<int64_t> s_nodeAtJoin{0};
 std::atomic<uint64_t> s_seq{0};
 std::atomic<bool>    s_owed{false};
 std::atomic<bool>    s_resending{false};   /* an idle is out and nothing has come back */
+std::atomic<int64_t> s_armedUs{0};         /* wall clock when the busy grace was armed */
 std::atomic<int64_t> s_until{kNever};
 std::atomic<int64_t> s_chipNext{kNever};   /* the earliest armed timer, in T */
 std::atomic<int64_t> s_lastUntil{kNever};
@@ -201,9 +210,28 @@ int spawnReader(int fd, void (*onDatagram)(const char*, size_t))
 
 void armWatchdog()
 {
+    s_armedUs.store(rawWallUs());
     if (s_tfd < 0) return;
     struct itimerspec its = {};
     its.it_value.tv_nsec = kBusyGraceNs;
+    timerfd_settime(s_tfd, 0, &its, nullptr);
+}
+
+bool strictTime()
+{
+    static const bool on = [] {
+        const char* e = getenv("SIM_MESH_STRICT_TIME");
+        return e && *e == '1';
+    }();
+    return on;
+}
+
+/* Strict time, a station still at work: look again kStrictSayS on. */
+void armStrictLook()
+{
+    if (s_tfd < 0) return;
+    struct itimerspec its = {};
+    its.it_value.tv_sec = kStrictSayS;
     timerfd_settime(s_tfd, 0, &its, nullptr);
 }
 
@@ -232,6 +260,14 @@ void* watchdogMain(void*)
     for (;;) {
         uint64_t n;
         if (read(s_tfd, &n, sizeof n) != (ssize_t)sizeof n) continue;
+        if (strictTime() && s_owed.load()) {
+            int64_t busy = (rawWallUs() - s_armedUs.load()) / 1000000;
+            if (busy >= kStrictSayS)
+                B()->log(SIMRADIO_LOG_WARN, "conductor: at work %lld s of wall time on one grant, "
+                         "and strict time holds T for it", (long long)busy);
+            armStrictLook();
+            continue;
+        }
         if (s_owed.exchange(false)) {
             sendIdleNow(s_until.load());
             armResend();
