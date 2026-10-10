@@ -283,6 +283,9 @@ RESEND_GAP_S = 0.1
 # A reader that has not, this long in wall time after they were written, is
 # not waiting for them; the channel lets go of T and says so.
 UNREAD_GRACE_S = 1.0
+# Strict time (SIM_MESH_STRICT_TIME=1): nothing on the wall clock decides
+# where T goes, so a reader is waited for however long its host takes.
+STRICT_TIME = os.environ.get("SIM_MESH_STRICT_TIME", "") == "1"
 
 # How many turns of the event loop `settle()` waits, at most, for the loop to
 # have nothing else ready.
@@ -1045,6 +1048,15 @@ class Ether(asyncio.DatagramProtocol):
                 self.settle(self.release)
         return end
 
+    def station_idle(self, sid):
+        """Whether station `sid` has said it is idle since it was last told
+        anything: done with the instant it is at. True in a real-time run, and
+        for a station not in the run."""
+        if not self.clock.virtual:
+            return True
+        station = self.stations.get(sid)
+        return station is None or bool(station.idle)
+
     def recv_floor(self, sid, addr, msg):
         """The station's host door changed hands. It said something, so it is
         not idle until it says so; a floor outside a tool session is no
@@ -1390,7 +1402,8 @@ class Ether(asyncio.DatagramProtocol):
         now = channel.holding()
         if now and not was:
             self.unread += 1
-            channel.timer = self.loop.call_later(UNREAD_GRACE_S, self.unread_grace, channel)
+            if not STRICT_TIME:
+                channel.timer = self.loop.call_later(UNREAD_GRACE_S, self.unread_grace, channel)
         elif was and not now:
             self.unread -= 1
             if channel.timer is not None:
@@ -1399,9 +1412,13 @@ class Ether(asyncio.DatagramProtocol):
         if not totals and channel.written == channel.taken:
             self.channels.pop(channel.key, None)
         if took and was and not now:
+            # The reader owes an idle for its input already: its report
+            # counts as it speaking, and its idle comes once that work is
+            # done. A message sent to it for the purpose would land at the
+            # host's moment, in the middle of that work.
             reader = self.stations.get(channel.reader)
             if reader is not None:
-                self.send(channel.reader, {"type": "run", "t": reader.told})
+                self.mark(reader, False)
         self.kick()
 
     def unread_grace(self, channel):
