@@ -280,7 +280,7 @@ static int64_t wait_end(const struct simclock_ops* o, int64_t deadline)
  * until then would run backwards when it did. */
 static int64_t clock_now(const struct simclock_ops* o, clockid_t c)
 {
-    int64_t n = o ? o->node_us() : 0;
+    int64_t n = o ? (o->read_us ? o->read_us() : o->node_us()) : 0;
     int64_t epoch = o ? o->epoch_us() : s_epochEnv;
     return wall_clock(c) ? n + epoch : n;
 }

@@ -48,6 +48,13 @@ constexpr long kResendNs = 250 * 1000 * 1000;
  * stops the run, and says so every kStrictSayS of wall time. */
 constexpr long kStrictSayS = 10;
 
+/* Strict time: how many reads of one instant make a thread one that waits for
+ * the clock to move (readNowUs). Handling a packet or an event reads the clock
+ * a few times, and at a thousand a working loop of reticulum's stations
+ * already reached it in a city run; a loop that waits on the clock reaches a
+ * hundred thousand in a fraction of a second of the host's time. */
+constexpr int kSpinReads = 100000;
+
 std::atomic<int>     s_mode{-1};
 std::atomic<int64_t> s_T{0};
 std::atomic<int64_t> s_epoch{0};
@@ -64,6 +71,7 @@ void               (*s_sendIdle)(uint64_t, int64_t) = nullptr;
 std::atomic<void (*)(void)> s_onAdvance{nullptr};
 std::atomic<bool>    s_holding{false};  /* a datagram is being applied (hold) */
 bool                 s_hookOwed = false; /* T moved during it; under B()->lock() */
+thread_local bool    t_grants = false;   /* this thread applies the ether's grants */
 int                  s_tfd = -1;
 
 /* The real wall clock, past the time shim. */
@@ -337,7 +345,51 @@ void startWatchdog()
 
 /* ---- The time shim ---- */
 
+/* Node time as the station's own code reads it: simradio_node_us, and the
+ * clocks the time shim answers. Under strict time T moves only when the
+ * station is idle, and a thread that waits for time by reading the clock in a
+ * loop never is: T would wait for it, and it for T. So a thread's
+ * kSpinReads-th read of one instant first sleeps the shortest sleep there is,
+ * which the time shim ends at the next instant a wait can end on: the next
+ * whole millisecond of node time, or the chips' next event before it with
+ * SIM_MESH_SHORT_WAITS=chip. When a thread waits, and what it reads, then
+ * follow from its own reads alone, never from the host's pace: work that
+ * reads the clock fewer times at one instant takes no time of T's, as before,
+ * and work that never reads it holds T until it is done. The thread that
+ * applies the ether's grants never sleeps here, since only it moves T. */
+int64_t readNowUs()
+{
+    int64_t now = nodeNowUs();
+    if (!strictTime() || !isVirtual() || t_grants || !s_joined.load()) return now;
+    static thread_local int64_t last = -1;
+    static thread_local int same = 0;
+    if (now != last) {
+        last = now;
+        same = 0;
+        return now;
+    }
+    if (++same < kSpinReads) return now;
+    same = 0;              /* the log below reads the clock too */
+    static thread_local bool said = false;
+    if (!said) {
+        said = true;
+        B()->log(SIMRADIO_LOG_WARN, "conductor: a thread read node time %d times at %lld us; "
+                 "strict time sleeps it until the next instant a wait ends on (said once a thread)",
+                 kSpinReads, (long long)now);
+    }
+    usleep(1);
+    now = nodeNowUs();
+    if (now != last) {
+        last = now;
+        same = 0;
+    } else {
+        same = kSpinReads - 1;   /* a signal ended the sleep: the next read sleeps again */
+    }
+    return now;
+}
+
 int64_t opsNodeUs() { return nodeNowUs(); }
+int64_t opsReadUs() { return readNowUs(); }
 int64_t opsEpochUs() { return epochUs(); }
 int     opsWakeCreate(void (*due)(void*), void* arg) { return wakeCreate(due, arg); }
 void    opsWakeAt(int w, int64_t node) { wakeAt(w, node); }
@@ -355,7 +407,7 @@ int64_t opsChipNextUs()
 }
 
 const struct simclock_ops kOps = { opsNodeUs, opsEpochUs, opsWakeCreate, opsWakeAt, opsIdle,
-                                   opsChipNextUs };
+                                   opsChipNextUs, opsReadUs };
 
 void attachShim()
 {
@@ -476,6 +528,7 @@ void runDue()
 void advanceTo(int64_t t)
 {
     if (!isVirtual()) return;
+    t_grants = true;
     B()->lock();
     bool moved = t > s_T.load();
     if (moved) s_T.store(t);
@@ -489,6 +542,7 @@ void advanceTo(int64_t t)
 
 void hold()
 {
+    t_grants = true;
     s_holding.store(true);
 }
 
@@ -600,7 +654,7 @@ void start()
 }  // namespace conductor
 
 extern "C" int simradio_virtual(void) { return conductor::isVirtual() ? 1 : 0; }
-extern "C" int64_t simradio_node_us(void) { return conductor::nodeNowUs(); }
+extern "C" int64_t simradio_node_us(void) { return conductor::readNowUs(); }
 extern "C" int64_t simradio_epoch_us(void) { return conductor::epochUs(); }
 extern "C" int64_t simradio_node_to_conductor(int64_t node) { return conductor::conductorOf(node); }
 extern "C" int simradio_wake_create(void (*due)(void*), void* arg) { return conductor::wakeCreate(due, arg); }
