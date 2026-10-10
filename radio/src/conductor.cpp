@@ -403,6 +403,7 @@ int64_t readNowUs()
 
 int64_t opsNodeUs() { return nodeNowUs(); }
 int64_t opsReadUs() { return readNowUs(); }
+void    opsSpoke() { spoke(); }
 int64_t opsEpochUs() { return epochUs(); }
 int     opsWakeCreate(void (*due)(void*), void* arg) { return wakeCreate(due, arg); }
 void    opsWakeAt(int w, int64_t node) { wakeAt(w, node); }
@@ -420,7 +421,7 @@ int64_t opsChipNextUs()
 }
 
 const struct simclock_ops kOps = { opsNodeUs, opsEpochUs, opsWakeCreate, opsWakeAt, opsIdle,
-                                   opsChipNextUs, opsReadUs };
+                                   opsChipNextUs, opsSpoke, opsReadUs };
 
 void attachShim()
 {

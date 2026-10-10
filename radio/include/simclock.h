@@ -22,6 +22,8 @@ struct simclock_ops {
     void    (*idle)(void);                                  /* nothing to do before the wakes */
     int64_t (*chip_next_us)(void);                          /* the chips' next timer, node µs;
                                                              * INT64_MAX with none */
+    void    (*spoke)(void);                                 /* the station took input it is now
+                                                             * at work on: it owes an idle */
     int64_t (*read_us)(void);                               /* node time as the station's code
                                                              * reads it: under strict time, a
                                                              * read may first wait for T to
