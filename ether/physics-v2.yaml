@@ -1,0 +1,108 @@
+# Physics v2: the radio model as a bench measured it on 13 October 2026, on
+# an SX1262 (a RAK4630) and an LR2021 (two XIAO nRF54L15). The ether reads
+# this file with `--physics` (simd's and ether.py's); ether.py's "Physics v2"
+# table says which rule each figure feeds, ether/INTERNALS.md "Physics v2"
+# how. Every figure here is the bench's; what it does not cover is said beside
+# it. Measured at SF7, 125 kHz, CR 4/5, 16-symbol preambles unless stated,
+# with the frames 75-80 dB over the receivers' floors: noise played no part.
+version: 2
+
+# The frame `sinr_limit_db` is stated for: 40 bytes, CR 4/5, an explicit
+# header with CRC, at 125 kHz, lost one time in ten at that ratio.
+reference: {payload: 40, cr: 5, implicit: false, crc: true, bw: 125000, per: 0.10}
+
+chips:
+  sx1262:
+    # Another spreading factor is noise: the signal-to-interference ratio at
+    # which the reference frame at this spreading factor fails one time in
+    # ten under a frame at another one (B5, eight curves). Measured: SF5
+    # under SF7 -2.2 (1 % at -1.2), SF6 under SF7 -5.3 (-3.1), SF7 under SF5
+    # -8.3 (-7.5) and under SF6 -7.4 (-6.3); SF7 takes the mean of its two
+    # pairs. From 10 % to 1 % the bench's curves span 0.8-2.2 dB. SF8 to
+    # SF12 are unmeasured and take the curve's own limit (the datasheet's
+    # SNR), which an SX1272 measurement (ether.py's INTER_SF_REJECTION_DB)
+    # puts 1-5 dB on the pessimistic side there.
+    sinr_limit_db: {5: -2.2, 6: -5.3, 7: -7.85}
+    # Two frames of one spreading factor at one receiver, the later one
+    # starting inside the earlier one, by d = the later's level less the
+    # earlier's at the receiver, in dB (1,939 trials at SF7; the earlier
+    # frame 120 bytes, the later 40). `earlier`: how often the earlier frame
+    # is still delivered, by d alone, as a logistic: half at `half_db`, 10 %
+    # to 90 % over `width_db` (fitted to 787 trials). `later`: how often the
+    # later frame is delivered, by the part of the earlier frame it starts
+    # in, points of [d, share] read as a straight line between them and held
+    # flat beyond: in the preamble (the sync word with it), in the header;
+    # never in the payload (0 of 87). A later frame that outlasts the earlier
+    # one (40 bytes under 120) follows the same rules: the earlier survives
+    # up to equal level and is gone by +3 dB, the later is never received
+    # from a payload start (0 of 60), though most of it is in the clear.
+    # `capture_by_sf` holds a spreading factor's own tables where measured
+    # (SF6, 40 bytes against 40: the earlier frame is lost sooner, 20 of 56
+    # at +0.4 dB, and header starts are captured more readily, 10 of 20 at
+    # +3.1 and 36 of 39 from +5.9); the rest take `capture`. SF5 is
+    # unmeasured. Where a later frame starts within the preamble matters
+    # (at SF6 a start at its eighth symbol won 14 of 20 at +0.4 dB) and is
+    # not modelled: one pair of points so far. The SNR a delivered frame
+    # reports is its signal over the noise and everything on the air during
+    # its last symbol, as both chips report it (the same rule for every
+    # frame; ether.py `end_message`).
+    # Fitted on the trials of different frames (identical 0), both lengths
+    # pooled at SF7: the logistic by likelihood (1,147 trials), the points
+    # the pooled cells made monotone (adjacent cells out of order pooled).
+    capture:
+      earlier: {half_db: 1.4, width_db: 2.8}
+      later:
+        preamble: [[-0.5, 0.00], [-0.3, 0.05], [0.6, 0.05], [1.3, 0.15], [1.9, 0.35], [3.2, 0.78], [5.8, 1.00]]
+        header: [[2.2, 0.00], [3.0, 0.05], [3.4, 0.10], [5.9, 0.40], [8.5, 0.55], [8.8, 0.70], [11.2, 0.75]]
+    capture_by_sf:
+      6:
+        # 344 trials; the preamble's first point is assumed (no capture of a
+        # weaker later frame, as at SF7 near equal level).
+        earlier: {half_db: 0.1, width_db: 2.9}
+        later:
+          preamble: [[-0.5, 0.00], [0.4, 0.70], [1.9, 0.95], [3.1, 1.00]]
+          header: [[0.4, 0.00], [1.9, 0.14], [3.1, 0.50], [5.9, 0.89], [8.6, 0.95]]
+    # How often a channel check hears a strong frame at another spreading
+    # factor, "<the check's SF>><the frame's SF>", per look, with the clear
+    # channel's false busy below taken out. A look is the receiver's lock
+    # first, then a two-symbol CAD at the node's own spreading factor, the
+    # LR2021's side detectors off. Two spreading factors apart it never
+    # does, on either chip, in either direction: a pair not listed is 0.
+    # Measured at -30 to -41 dBm only; at weak levels the lock odds at the
+    # check's own spreading factor scale the figure, which is an assumption.
+    # SF5 against SF6 is unmeasured and is given SF6 against SF7's figures
+    # by the neighbour rule.
+    sense: {"6>7": 0.38, "7>6": 0.23, "5>6": 0.38, "6>5": 0.23}
+    # How often a channel check reads a clear channel busy, per look, by its
+    # spreading factor, the looks taken as independent: what a send meets,
+    # the lock first and then the CAD at the det_peak the firmware shipped
+    # on 13 October 2026 (40). A CAD alone reads a quiet channel busy far
+    # less (this chip 5 % at SF7, an LR2021 0.5-1.5 % at the datasheet's
+    # thresholds); a firmware that ships another det_peak changes these
+    # figures and nothing else. SF5 is unmeasured on this chip and takes
+    # the low end of its spread. The chip model applies these
+    # (radio/src/busy.h), the ether passes them on in SIM_MESH_BOARD.
+    cad_false_busy: {5: 0.07, 6: 0.10, 7: 0.13}
+  lr2021:
+    # As for the SX1262, the LR2021's own figures: SF5 under SF7 -3.8 (1 %
+    # at -2.9; a repeat -3.6/-2.4), SF6 under SF7 -5.6 (-3.7; -5.5/-4.3),
+    # SF7 under SF5 -8.9 (-8.0) and under SF6 -8.1 (-7.2), SF7 their mean.
+    sinr_limit_db: {5: -3.8, 6: -5.6, 7: -8.5}
+    # Fitted as the SX1262's: 1,315 trials at SF7, both lengths pooled.
+    capture:
+      earlier: {half_db: 1.0, width_db: 2.2}
+      later:
+        preamble: [[-0.5, 0.00], [0.5, 0.01], [1.9, 0.29], [3.0, 0.72], [4.2, 0.95], [5.6, 1.00]]
+        header: [[-0.5, 0.00], [0.5, 0.03], [1.9, 0.10], [3.0, 0.26], [4.9, 0.87], [12.6, 0.90]]
+    capture_by_sf:
+      6:
+        # 291 trials, 40 bytes against 40: the earlier frame survives 44 of
+        # 55 at +0.2 dB and 1 of 49 from +1.9; the later one is captured
+        # sooner than at SF7 (6 of 7 preamble starts at +1.9, every header
+        # start from +3.0).
+        earlier: {half_db: 0.6, width_db: 1.4}
+        later:
+          preamble: [[0.2, 0.00], [1.9, 0.86], [3.0, 0.95]]
+          header: [[0.2, 0.00], [1.9, 0.33], [3.0, 1.00]]
+    sense: {"6>7": 0.70, "7>6": 0.60, "5>6": 0.70, "6>5": 0.60}
+    cad_false_busy: {5: 0.18, 6: 0.23, 7: 0.32}

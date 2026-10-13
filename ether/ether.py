@@ -241,6 +241,28 @@ BENCH_STRONGER = 119 / 136
 BENCH_STRONGER_DB = 2.7
 BENCH_CERTAIN_DB = 6.1
 
+# Physics v2 (`Physics(version=2, chips=…)`, `--physics FILE`): the radio model
+# as a bench measured it on an SX1262 and an LR2021 on 13 October 2026, a
+# table per chip in ether/physics-v2.yaml, which says what each figure
+# assumes. Absent, every rule above stands as it is. Per chip:
+# `sinr_limit_db`, the signal-to-interference ratio at which the reference
+# frame below fails one time in ten under a frame at another spreading
+# factor, which fixes the chip's own loss against the curve
+# (`Physics.chip_loss`): another spreading factor is noise to the three
+# stages, nothing more; `capture`, two frames of one spreading factor at one
+# receiver (`Ether.capture_outcome`): the earlier survives by the level
+# difference alone, the later is received by the part of the earlier frame it
+# starts in; `sense`, how often a CAD at one spreading factor hears a frame at
+# another (`Ether.sensed`); and `cad_false_busy`, how often a CAD reads a
+# clear channel busy, which the chip model applies, not the ether
+# (radio/src/busy.h; testbed/boards.py hands it on in SIM_MESH_BOARD). A
+# delivered frame reports the SNR of its last symbol (`Ether.end_snr_db`).
+PHYSICS_V2_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "physics-v2.yaml")
+# The frame `sinr_limit_db` is stated for, and the error rate it fails at there.
+V2_REFERENCE = {"payload": 40, "cr": 5, "implicit": False, "crc": True, "bw": 125_000,
+                "per": 0.10}
+DEFAULT_CHIP = "sx1262"     # a station the run named no chip for (`Ether.set_chips`)
+
 # What follows the preamble before `t_pre`: two sync-word symbols and 2.25 of
 # the start-of-frame delimiter (AN1200.13), so a frame's preamble proper ends
 # this many symbols before the `t_pre` its transmitter states.
@@ -420,6 +442,20 @@ def seeded_draw(seed, *parts):
     return int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big") / 2.0 ** 64
 
 
+def interp(points, x):
+    """A table of (x, y) points, in order of x, read at `x`: a straight line
+    between the points, the first's y below them, the last's above."""
+    points = [(float(a), float(b)) for a, b in points]
+    if not points:
+        return 0.0
+    if x <= points[0][0]:
+        return points[0][1]
+    for (lo, y_lo), (hi, y_hi) in zip(points, points[1:]):
+        if x <= hi:
+            return y_lo + (y_hi - y_lo) * (x - lo) / (hi - lo)
+    return points[-1][1]
+
+
 def curve_sf(sf):
     """The spreading factor the error curve is taken at: a frame that named
     none, or one outside the datasheet's, at the slowest."""
@@ -562,12 +598,7 @@ def side_preamble_miss(preamble_symbols):
         n = float(preamble_symbols)
     except (TypeError, ValueError):
         return points[0][1]
-    if n <= points[0][0]:
-        return points[0][1]
-    for (lo, p_lo), (hi, p_hi) in zip(points, points[1:]):
-        if n <= hi:
-            return p_lo + (p_hi - p_lo) * (n - lo) / (hi - lo)
-    return points[-1][1]
+    return interp(points, n)
 
 
 def rician_db(k, draw):
@@ -676,7 +707,7 @@ class Physics:
 
     def __init__(self, noise_figure_db=DEFAULT_NOISE_FIGURE_DB, interference=True,
                  fading_db=DEFAULT_FADING_DB, coherence_s=DEFAULT_COHERENCE_S,
-                 rician_k=DEFAULT_RICIAN_K):
+                 rician_k=DEFAULT_RICIAN_K, version=1, chips=None, reference=None):
         self.noise_figure_db = float(noise_figure_db)
         self.interference = bool(interference)
         self.fading_db = float(fading_db)
@@ -690,11 +721,96 @@ class Physics:
         if self.rician_k is not None and not self.rician_k >= 0:
             raise ValueError("the Rician K factor is a power ratio, 0 or more, not %g"
                              % self.rician_k)
+        # Physics v2: the bench's tables, one per chip (PHYSICS_V2_FILE).
+        self.version = int(version or 1)
+        if self.version not in (1, 2):
+            raise ValueError("the physics version is 1 or 2, not %r" % (version,))
+        self.chips = {str(name): dict(table or {}) for name, table in (chips or {}).items()}
+        if self.version == 2 and not self.chips:
+            raise ValueError("physics v2 needs a table per chip (ether/physics-v2.yaml)")
+        self.reference = dict(V2_REFERENCE, **(reference or {}))
+        self._chip_loss = {}
 
     @property
     def fading(self):
         """True when frames' levels fade."""
         return bool(self.fading_db) or self.rician_k is not None
+
+    @property
+    def v2(self):
+        """True under physics v2: the bench's tables per chip decide."""
+        return self.version == 2
+
+    def chip(self, name):
+        """A chip's tables: its own, else the default chip's, else none."""
+        return self.chips.get(name) or self.chips.get(DEFAULT_CHIP) or {}
+
+    def chip_loss(self, name, sf):
+        """How far this chip sits from the curve at `sf` beyond
+        `implementation_loss`, in dB: what puts the reference frame's error
+        rate at the reference's `per` when its signal-to-noise ratio is the
+        chip's `sinr_limit_db` there (another spreading factor read as noise,
+        as the bench measured it). 0 for a spreading factor the chip has no
+        figure for, where the curve's own limit stands."""
+        key = (name, sf)
+        if key not in self._chip_loss:
+            limits = self.chip(name).get("sinr_limit_db") or {}
+            limit = limits.get(sf, limits.get(str(sf)))
+            loss = 0.0
+            if limit is not None:
+                ref, at = self.reference, curve_sf(sf)
+                lo, hi = -10.0, 10.0
+                for _ in range(40):
+                    mid = (lo + hi) / 2.0
+                    per = 1.0 - frame_odds(at, float(limit) - implementation_loss(at) - mid,
+                                           ref["payload"], ref["cr"], ref["implicit"],
+                                           ref["crc"], ref["bw"])
+                    if per > ref["per"]:
+                        hi = mid
+                    else:
+                        lo = mid
+                loss = (lo + hi) / 2.0
+            self._chip_loss[key] = loss
+        return self._chip_loss[key]
+
+    def capture(self, name, sf):
+        """A chip's capture tables at spreading factor `sf`: its own where
+        measured (`capture_by_sf`), else the chip's `capture`."""
+        chip = self.chip(name)
+        by_sf = chip.get("capture_by_sf") or {}
+        return by_sf.get(sf) or by_sf.get(str(sf)) or chip.get("capture") or {}
+
+    def capture_earlier(self, name, sf, d):
+        """How often the earlier of two frames at `sf` survives a later one
+        `d` dB stronger: a logistic of `half_db` and `width_db` (10 % to
+        90 %), or a table of points."""
+        spec = self.capture(name, sf).get("earlier")
+        if not spec:
+            return 0.0
+        if isinstance(spec, dict):
+            slope = float(spec["width_db"]) / (2.0 * math.log(9.0))
+            x = min(60.0, max(-60.0, (d - float(spec["half_db"])) / slope))
+            return 1.0 / (1.0 + math.exp(x))
+        return interp(spec, d)
+
+    def capture_later(self, name, sf, part, d):
+        """How often the later frame at `sf` is received, `d` dB stronger
+        and starting in `part` of the earlier one; never in a part without
+        a table."""
+        points = (self.capture(name, sf).get("later") or {}).get(part)
+        return interp(points, d) if points else 0.0
+
+    def sense_factor(self, name, slot_sf, frame_sf):
+        """How often a CAD at `slot_sf` hears a strong frame at `frame_sf`,
+        beyond the lock odds: 1 for its own spreading factor, the chip's figure
+        for the pair `"<slot>><frame>"`, 0 for a pair without one."""
+        try:
+            slot_sf, frame_sf = int(slot_sf), int(frame_sf)
+        except (TypeError, ValueError):
+            return 0.0
+        if slot_sf == frame_sf:
+            return 1.0
+        return float((self.chip(name).get("sense") or {}).get("%d>%d" % (slot_sf, frame_sf), 0.0))
 
     # Sergey's fork (sergeyculum) named this same spread/coherence/Rician
     # setting by an older model's terms (slow + fast terms, two draws per
@@ -713,6 +829,8 @@ class Physics:
             text += ", Rician K %g per frame" % self.rician_k
         if not self.interference:
             text += ", no interference (an oracle)"
+        if self.v2:
+            text += ", physics v2 (%s)" % ", ".join(sorted(self.chips))
         return text
 
     @classmethod
@@ -722,7 +840,8 @@ class Physics:
                    data.get("interference", True),
                    data.get("fading_db", data.get("slow_fading_db", DEFAULT_FADING_DB)),
                    data.get("coherence_s", data.get("slow_fading_s", DEFAULT_COHERENCE_S)),
-                   data.get("rician_k", data.get("fast_fading_k", DEFAULT_RICIAN_K)))
+                   data.get("rician_k", data.get("fast_fading_k", DEFAULT_RICIAN_K)),
+                   data.get("version", 1), data.get("chips"), data.get("reference"))
 
     def as_dict(self):
         out = {"noise_figure_db": self.noise_figure_db}
@@ -734,7 +853,35 @@ class Physics:
             out["rician_k"] = self.rician_k
         if not self.interference:
             out["interference"] = False
+        if self.version != 1:
+            # The tables themselves, so a record says what physics it ran under.
+            out["version"] = self.version
+            out["chips"] = self.chips
+            if self.reference != V2_REFERENCE:
+                out["reference"] = self.reference
         return out
+
+
+def read_physics_file(path):
+    """A physics file's settings (PHYSICS_V2_FILE): `version`, `chips` and
+    `reference`, as `Physics` takes them."""
+    import yaml                 # only a run that names a file reads one
+
+    with open(path, encoding="utf-8") as handle:
+        data = yaml.safe_load(handle) or {}
+    return {key: data[key] for key in ("version", "chips", "reference") if key in data}
+
+
+def cad_false_busy_spec(chips):
+    """The chips' `cad_false_busy` tables as SIM_MESH_BOARD's entry for the
+    chip models (radio/src/busy.h): `<chip>.<sf>:<p>` entries separated by
+    commas, or nothing."""
+    out = []
+    for chip, table in sorted((chips or {}).items()):
+        for sf, p in sorted(((int(k), float(v))
+                             for k, v in (table.get("cad_false_busy") or {}).items())):
+            out.append("%s.%d:%g" % (chip, sf, p))
+    return ",".join(out)
 
 
 class Station:
@@ -965,6 +1112,7 @@ class Ether(asyncio.DatagramProtocol):
         self.stations = {}          # sid -> Station
         self.tables = {}            # band name -> slt.Table
         self.names = {}             # sid -> node name, the table's index
+        self.chips = {}             # sid -> its radio's chip (`set_chips`), for physics v2
         self.gains = {}             # sid -> antenna gain in dBi
         self.frames = []            # frames still in flight or just ended
         self.knots = {}             # (name, name, k) -> a fading knot (`fade_db`)
@@ -1563,11 +1711,13 @@ class Ether(asyncio.DatagramProtocol):
             return False
         return level >= self.noise(bw_hz) + self.sensitivity(sf)
 
-    def symbol_error_at(self, frame, level):
+    def symbol_error_at(self, frame, level, sf=None):
         """The chance one symbol of `frame` is demodulated wrong at `level`:
-        the curve at its SNR less the chip's implementation loss."""
-        return symbol_error(frame.sf, level - self.noise(frame.bw)
-                            - implementation_loss(frame.sf))
+        the curve at its SNR less the chip's implementation loss. `sf` reads
+        the curve at another spreading factor: a CAD's own, hearing a frame
+        at a neighbouring one (`sensed`)."""
+        sf = frame.sf if sf is None else sf
+        return symbol_error(sf, level - self.noise(frame.bw) - implementation_loss(sf))
 
     def fade_db(self, a, b, t_us):
         """How far the link between stations a and b sits from the table's
@@ -1643,16 +1793,20 @@ class Ether(asyncio.DatagramProtocol):
             k += 1
         return cuts
 
-    def locks_on(self, frame, rsid, slot, now, det=0):
+    def locks_on(self, frame, rsid, slot, now, det=0, sf=None, factor=1.0):
         """The first stage: whether a receiver finds the frame's preamble and
-        sync word, at the frame's faded level at `now`; a side detector (`det`
-        1 and up) also misses a short preamble at its own rate
-        (`side_preamble_miss`). One draw per frame and slot, so a lock on
-        time, a late one and a CAD read the same."""
+        sync word, at the frame's faded level at `now` less what physics v2
+        charges it (`penalty_db`); a side detector (`det` 1 and up) also
+        misses a short preamble at its own rate (`side_preamble_miss`). One
+        draw per frame and slot, so a lock on time, a late one and a CAD read
+        the same. `sf` and `factor` are a CAD's under physics v2 (`sensed`):
+        the curve at its own spreading factor, the odds scaled by the chip's
+        figure for the pair."""
         level = self.level_at(frame, rsid, now)
         if level is None:
             return False
-        odds = lock_odds(self.symbol_error_at(frame, level))
+        odds = lock_odds(self.symbol_error_at(
+            frame, level - self.penalty_db(frame, rsid, now), sf)) * factor
         if det:
             odds *= 1.0 - side_preamble_miss(frame.pre_symbols)
         return self.draw(frame, rsid, slot, "lock") < odds
@@ -1663,35 +1817,40 @@ class Ether(asyncio.DatagramProtocol):
         header has none to fail; its first block is the payload's."""
         if frame.implicit:
             return True
-        level = self.level_at(frame, rsid, (frame.pre_us + frame.hdr_us) / 2.0)
-        p = self.symbol_error_at(frame, level)
+        at = (frame.pre_us + frame.hdr_us) / 2.0
+        level = self.level_at(frame, rsid, at)
+        p = self.symbol_error_at(frame, level - self.penalty_db(frame, rsid, at))
         return (self.draw(frame, rsid, slot, "hdr")
                 < block_survives(p, FIRST_BLOCK_SYMBOLS, True))
 
     def payload_blocks(self, frame, rsid):
         """The payload's blocks at one receiver, as (faded level, symbols,
-        correcting): spread evenly from the header's end to the frame's, and
-        the first block before them when there is no header."""
+        correcting, the block's middle instant): spread evenly from the
+        header's end to the frame's, and the first block before them when
+        there is no header."""
         first, count, per_block, correcting = frame_blocks(
             frame.sf, frame.bw, frame.cr, frame.payload_len, frame.implicit, frame.crc)
         out = []
         if frame.implicit:
-            out.append((self.level_at(frame, rsid, (frame.pre_us + frame.hdr_us) / 2.0),
-                        first, True))
+            at = (frame.pre_us + frame.hdr_us) / 2.0
+            out.append((self.level_at(frame, rsid, at), first, True, at))
         span = (frame.end_us - frame.hdr_us) / count if count else 0.0
         for i in range(count):
-            out.append((self.level_at(frame, rsid, frame.hdr_us + (i + 0.5) * span),
-                        per_block, correcting))
+            at = frame.hdr_us + (i + 0.5) * span
+            out.append((self.level_at(frame, rsid, at), per_block, correcting, at))
         return out
 
     def payload_survives(self, reception, blocks):
-        """The third stage, at the frame's end: whether every block decodes.
+        """The third stage, at the frame's end: whether every block decodes,
+        each at its level less what physics v2 charges it then (`penalty_db`).
         One draw per frame and slot."""
-        frame = reception.frame
+        frame, rsid = reception.frame, reception.rsid
         odds = 1.0
-        for level, n, correcting in blocks:
-            odds *= block_survives(self.symbol_error_at(frame, level), n, correcting)
-        return self.draw(frame, reception.rsid, reception.slot, "payload") < odds
+        for level, n, correcting, at in blocks:
+            odds *= block_survives(
+                self.symbol_error_at(frame, level - self.penalty_db(frame, rsid, at)),
+                n, correcting)
+        return self.draw(frame, rsid, reception.slot, "payload") < odds
 
     def levels(self, sid, freq_hz, bw_hz=125_000, power_dbm=None, sf=None):
         """What every other station in the table would hear from `sid` on this
@@ -2049,6 +2208,13 @@ class Ether(asyncio.DatagramProtocol):
         det = self.detector(state, msg)
         if det and rstation.sensing(slot):
             det = None          # a CAD is the main detector's alone
+        if self.physics.v2 and rstation.sensing(slot):
+            # Physics v2's CAD: a frame at the slot's own spreading factor by
+            # the lock draw, at a neighbouring one by the chip's figure, further
+            # off never (`sensed`); the sense threshold is an RSSI read's.
+            if self.sensed(frame, rstation, slot, state, now):
+                self.send(rstation.sid, self.begin_message(frame, slot, faded, energy=True, t0=now))
+            return
         decodable = det is not None and self.locks_on(frame, rstation.sid, slot, now, det)
         if not decodable:
             if self.in_band_energy(rstation.sid, state, now) >= \
@@ -2089,13 +2255,19 @@ class Ether(asyncio.DatagramProtocol):
     def takes(self, held, frame, rsid, now):
         """Whether a frame arriving now takes a receiver off the one it is
         following, on the two frames' faded levels there now: by leading it by
-        the same-SF figure, or with bench capture as the bench saw two frames
-        meet — never once the receiver is past the first one's preamble, and
-        otherwise when the pair's outcome says the new one survives, the same
-        outcome its verdict will read. Never without interference (`Physics`)."""
+        the same-SF figure; under physics v2 when the pair's outcome
+        (`capture_outcome`) says the new one is received, by the part of the
+        held frame it starts in; or with bench capture as the bench saw two
+        frames meet — never once the receiver is past the first one's
+        preamble, and otherwise when the pair's outcome says the new one
+        survives, the same outcome its verdict will read. Never without
+        interference (`Physics`)."""
         if not self.physics.interference:
             return False
         lead = self.level_at(frame, rsid, now) - self.level_at(held.frame, rsid, now)
+        if self.physics.v2:
+            return self.capture_outcome(held.frame, frame, rsid, -lead,
+                                        self.capture_part(held.frame, now))[1]
         if not self.bench_capture:
             return lead >= SAME_SF_REJECTION_DB
         if now >= held.frame.pre_us:
@@ -2202,9 +2374,11 @@ class Ether(asyncio.DatagramProtocol):
             same_mw = 0.0
             for other in piece:
                 mw = dbm_to_mw(self.level_at(other, rsid, mid))
-                if self.bench_capture and same_class(frame.sf, other.sf):
+                if self.capturing and self.same_sf(frame.sf, other.sf):
                     same_mw += mw
                     continue
+                if self.physics.v2:
+                    continue    # another spreading factor was noise to the stages
                 classes[other.sf] = classes.get(other.sf, 0.0) + mw
             if same_mw > 0.0:
                 lead = level - mw_to_dbm(same_mw)
@@ -2225,15 +2399,138 @@ class Ether(asyncio.DatagramProtocol):
         receiver was locked is read off the first frame's reception: past its
         preamble, and following it, when the second started."""
         frame, rsid, slot = reception.frame, reception.rsid, reception.slot
-        same = [o for o in others if same_class(frame.sf, o.sf)]
+        same = [o for o in others if self.same_sf(frame.sf, o.sf)]
         partner = max(same, key=lambda o: (self.level_of(o, rsid), self.key_of(o)))
         first, second = sorted((frame, partner), key=lambda f: (f.start_us, self.key_of(f)))
         was = first.receptions.get((rsid, slot))
-        locked = (second.start_us >= first.pre_us
-                  and was is not None and was.followed_at(second.start_us))
-        outcome = bench_outcome(self.seed, self.key_of(first), self.key_of(second),
-                                self.node(rsid), lead if first is frame else -lead, locked)
+        followed = was is not None and was.followed_at(second.start_us)
+        first_lead = lead if first is frame else -lead
+        if self.physics.v2:
+            # The part of the first frame the second started in, when the
+            # receiver was following the first; one that was not is free to
+            # lock on, as at a preamble.
+            part = self.capture_part(first, second.start_us) if followed else "preamble"
+            outcome = self.capture_outcome(first, second, rsid, first_lead, part)
+        else:
+            outcome = bench_outcome(self.seed, self.key_of(first), self.key_of(second),
+                                    self.node(rsid), first_lead,
+                                    second.start_us >= first.pre_us and followed)
         return outcome[0] if first is frame else outcome[1]
+
+    @property
+    def capturing(self):
+        """True when two frames of one spreading factor are ruled on as a
+        bench saw them meet, `bench_outcome` or physics v2's
+        `capture_outcome`, rather than by the same-SF figure."""
+        return self.bench_capture or self.physics.v2
+
+    def same_sf(self, sf_a, sf_b):
+        """True when two frames meet as one spreading factor: exactly under
+        physics v2, by `same_class` otherwise (SF5 and SF6 take SF7's row)."""
+        if self.physics.v2:
+            return sf_a == sf_b
+        return same_class(sf_a, sf_b)
+
+    def set_chips(self, chips_by_sid):
+        """Which chip each station's radio is, sid -> "sx1262" or "lr2021",
+        from whatever drives the run (simd knows each firmware's radio), as
+        the loss table arrives: never over the wire, so a record is the same
+        with or without it. Physics v2's tables are per chip; a station not
+        named here is the default chip's."""
+        self.chips = {int(sid): str(chip) for sid, chip in (chips_by_sid or {}).items()}
+
+    def chip_of(self, rsid):
+        """The chip a station's radio is (`set_chips`), for physics v2's tables."""
+        return self.chips.get(rsid, DEFAULT_CHIP)
+
+    def interference_mw(self, frame, rsid, t_us, other_sf_only):
+        """The power, in milliwatts at `rsid`, of every transmission in
+        `frame`'s band on the air at instant `t_us`: at another spreading
+        factor only, or at any."""
+        mw = 0.0
+        for other in frame.interferers:
+            if (other_sf_only and other.sf == frame.sf) \
+                    or not other.start_us <= t_us < other.end_us:
+                continue
+            level = self.level_at(other, rsid, t_us)
+            if level is not None:
+                mw += dbm_to_mw(level)
+        return mw
+
+    def penalty_db(self, frame, rsid, t_us):
+        """Physics v2: what `frame` is charged at `rsid` at instant `t_us`, in
+        dB of signal-to-noise ratio: the noise's rise by every transmission in
+        its band at another spreading factor on the air then, their powers
+        summed in milliwatts, plus the receiver chip's own loss at the frame's
+        spreading factor (`Physics.chip_loss`). Nothing under v1, where
+        another spreading factor is a rejection figure (`verdict_for`)."""
+        if not self.physics.v2:
+            return 0.0
+        mw = self.interference_mw(frame, rsid, t_us, other_sf_only=True)
+        rise = 0.0
+        if mw > 0.0:
+            noise_mw = dbm_to_mw(self.noise(frame.bw))
+            rise = 10.0 * math.log10((noise_mw + mw) / noise_mw)
+        return rise + self.physics.chip_loss(self.chip_of(rsid), frame.sf)
+
+    def end_snr_db(self, frame, rsid, level):
+        """Physics v2: the SNR a delivered frame reports, its signal over the
+        noise and everything on the air in its band during its last symbol,
+        as both chips report it: a frame whose end another covers reads
+        about its lead over that one, a frame whose end is in the clear its
+        lead over the noise."""
+        try:
+            symbol_us = (1 << int(frame.sf)) / float(frame.bw or 125_000) * 1e6
+        except (TypeError, ValueError):
+            symbol_us = 0.0
+        at = max(frame.start_us, frame.end_us - symbol_us / 2.0)
+        mw = self.interference_mw(frame, rsid, at, other_sf_only=False)
+        signal = self.level_at(frame, rsid, at)
+        return (level if signal is None else signal) - mw_to_dbm(dbm_to_mw(self.noise(frame.bw)) + mw)
+
+    def sensed(self, frame, rstation, slot, state, now):
+        """Physics v2: whether a CAD at this slot hears `frame` at `now`. Only
+        on the slot's carrier and bandwidth; the curve is read at the CAD's
+        own spreading factor and the lock odds are scaled by the chip's figure
+        for the pair (`Physics.sense_factor`): 1 for the frame's own, the
+        measured share for a neighbouring one, 0 further off. The lock's draw,
+        so a CAD that heard a frame and the receive that follows agree."""
+        if (not same_carrier(state.get("freq"), frame.freq, state.get("bw"))
+                or state.get("bw") != frame.bw):
+            return False
+        factor = self.physics.sense_factor(self.chip_of(rstation.sid), state.get("sf"), frame.sf)
+        if factor <= 0.0:
+            return False
+        return self.locks_on(frame, rstation.sid, slot, now, sf=state.get("sf"), factor=factor)
+
+    @staticmethod
+    def capture_part(frame, t_us):
+        """The part of `frame` the instant `t_us` falls in: its preamble (the
+        sync word with it, to `t_pre`), its header (to `t_hdr`) or its payload."""
+        if t_us < frame.pre_us:
+            return "preamble"
+        if t_us < frame.hdr_us:
+            return "header"
+        return "payload"
+
+    def capture_outcome(self, first, second, rsid, lead, part):
+        """Physics v2's word on two frames of one spreading factor at one
+        receiver, as (the first survives, the second survives). `first`
+        started first, `lead` is its level over the second's there, `part`
+        the part of it the second started in. Two draws for the pair and the
+        receiver, in turn: the second is received by the later table's share
+        for the part and the difference; only when it is not, the first
+        survives by the earlier curve's share at the difference. So no pair
+        ever delivers both, as on the bench, and both are lost when neither
+        draw passes."""
+        d = -lead
+        chip = self.chip_of(rsid)
+        lo, hi = sorted((self.key_of(first), self.key_of(second)))
+        if seeded_draw(self.seed, lo, hi, self.node(rsid), "later") \
+                < self.physics.capture_later(chip, first.sf, part, d):
+            return False, True
+        return (seeded_draw(self.seed, lo, hi, self.node(rsid), "earlier")
+                < self.physics.capture_earlier(chip, first.sf, d), False)
 
     def verdict_pairwise(self, reception):
         """How interference leaves this frame at one receiver, the pairwise
@@ -2265,10 +2562,12 @@ class Ether(asyncio.DatagramProtocol):
     def end_message(self, reception, verdict, cause, level):
         """An rx_end for one slot, at the ether's instant now."""
         frame = reception.frame
+        snr = (self.end_snr_db(frame, reception.rsid, level) if self.physics.v2
+               else level - self.noise(frame.bw))
         end = {"type": "rx_end", "slot": reception.slot, "id": frame.eid,
                "t": self.now(), "verdict": verdict,
                "payload": frame.payload, "rssi": round(level),
-               "snr": round(level - self.noise(frame.bw))}
+               "snr": round(snr)}
         if cause:
             end["cause"] = cause
         return end
@@ -2806,6 +3105,10 @@ def main(argv=None):
     ap.add_argument("--seed", type=int,
                     help="the seed of the medium's draws, handed every station in its "
                          "welcome (default: drawn at random)")
+    ap.add_argument("--physics", metavar="FILE",
+                    help="a physics file: the version of the radio model and its tables "
+                         "per chip, as ether/physics-v2.yaml (default: none, the rules "
+                         "as they were)")
     ap.add_argument("--time", default="real",
                     help="real (default), max, or <k>x: virtual time as fast as the "
                          "stations allow, or paced at k times the wall clock")
@@ -2820,8 +3123,9 @@ def main(argv=None):
         ap.error("--bench-capture is a variant of the receiver-centred rule, not --pairwise's")
     try:
         physics = Physics(args.noise_figure, not args.no_interference,
-                          args.fading_db, args.coherence_s, args.rician_k)
-    except ValueError as err:
+                          args.fading_db, args.coherence_s, args.rician_k,
+                          **(read_physics_file(args.physics) if args.physics else {}))
+    except (OSError, ValueError) as err:
         ap.error(str(err))
     sids, gains, tables = {}, {}, {}
     if args.nodeset:
