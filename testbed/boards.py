@@ -62,14 +62,16 @@ def has_fem(own):
     return max_dbm(own) > CHIP_MAX_DBM
 
 
-def environment(own, busy_us="", busy_tcxo=False, host_us=0):
+def environment(own, busy_us="", busy_tcxo=False, host_us=0, cad_false_busy=""):
     """What a station of this `max_dbm` is told of its board: SIM_MESH_BOARD's
     JSON, one flat object (the chip model and hw-linux read it with a flat
     reader): chip, max_dbm, and fem_part, fem_tx_cal, fem_gain_db and
     fem_rx_gain_db when it has the front end; and, when a run asks for them,
     the chip's BUSY per command, `busy_us`, `busy_tcxo` 1 to charge the
-    TCXO's start, and `host_us`, the board's own time per transaction
-    (radio/src/model.cpp, `busyFigures`)."""
+    TCXO's start, `host_us`, the board's own time per transaction
+    (radio/src/model.cpp, `busyFigures`), and `cad_false_busy`, how often a
+    channel check reads a clear channel busy, per chip and spreading factor
+    (physics v2's, ether.py's `cad_false_busy_spec`; radio/src/busy.h)."""
     out = {"chip": CHIP, "max_dbm": max_dbm(own)}
     if has_fem(own):
         out.update(fem_part=FEM["part"], fem_tx_cal=FEM["tx_cal"],
@@ -80,6 +82,8 @@ def environment(own, busy_us="", busy_tcxo=False, host_us=0):
         out["busy_tcxo"] = 1
     if host_us:
         out["host_us"] = host_us
+    if cad_false_busy:
+        out["cad_false_busy"] = cad_false_busy
     return json.dumps(out, sort_keys=True)
 
 

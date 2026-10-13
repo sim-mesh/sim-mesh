@@ -312,6 +312,11 @@ class Simd:
 
     def __init__(self, args):
         self.args = args
+        # Physics v2's tables (`--physics`): the ether's medium takes them, and
+        # the stations' boards the chips' false busy (`make_station`).
+        self.physics_tables = (ether_module.read_physics_file(args.physics)
+                               if getattr(args, "physics", None) else {})
+        self.chips = {}     # node id -> its firmware's radio, for the ether (`make_station`)
         self.run_base = args.run            # where new runs go: this, or this-2, …
         self.ether_addr = args.ether
         self.ether = None
@@ -443,11 +448,13 @@ class Simd:
                                        interference=not self.args.no_interference,
                                        fading_db=self.args.fading_db,
                                        coherence_s=self.args.coherence_s,
-                                       rician_k=self.args.rician_k)
+                                       rician_k=self.args.rician_k,
+                                       **self.physics_tables)
         self.ether_transport, self.ether = await ether_module.open_ether(
             bind, record, physics=physics, time_mode=self.args.time,
             pairwise=self.args.pairwise, seed=self.args.seed, epoch=self.args.epoch,
             bench_capture=self.args.bench_capture)
+        self.ether.set_chips(self.chips)
         self.ether.on_tx = self.ether_tx
         self.ether.on_rx = self.ether_rx
         self.ether.on_station = self.ether_station
@@ -667,10 +674,16 @@ class Simd:
             on_status=self.station_status, on_output=self.station_output,
             clock=self.ether if self.virtual else None, on_event=self.station_event)
         station.watchers = len(self.consoles.get(name, ()))
-        station.board = boards_module.environment(node.get("max_dbm"), self.args.busy_us,
-                                                  self.args.busy_tcxo, self.args.host_us)
+        station.board = boards_module.environment(
+            node.get("max_dbm"), self.args.busy_us, self.args.busy_tcxo, self.args.host_us,
+            ether_module.cad_false_busy_spec(self.physics_tables.get("chips")))
         station.clock_profile = self.clock_profile(name)
         station.short_waits = self.args.short_waits
+        # Which chip its radio is (the firmware's node.yaml), told to the ether
+        # by direct call as the loss table is: physics v2's tables are per chip.
+        self.chips[int(node["id"])] = str(station.driver.firmware.get("radio") or "sx1262")
+        if getattr(self, "ether", None) is not None:
+            self.ether.set_chips(self.chips)
         return station
 
     def clock_profile(self, name):
@@ -1979,6 +1992,8 @@ class Simd:
             medium["clock_ppm"] = self.args.clock_ppm
         if self.args.busy_us:
             medium["busy_us"] = self.args.busy_us
+        if getattr(self.args, "physics", None):
+            medium["physics_file"] = os.path.basename(self.args.physics)
         if self.args.busy_tcxo:
             medium["busy_tcxo"] = True
         if self.args.host_us:
@@ -2300,6 +2315,10 @@ def parse_args(argv):
                     help="in a virtual-time run, each station's crystal off by a draw "
                          "uniform within this many parts per million, from the seed "
                          "and its name (default 0: every clock true)")
+    ap.add_argument("--physics", metavar="FILE",
+                    help="a physics file: the version of the radio model and its tables "
+                         "per chip, as ether/physics-v2.yaml (default: none, the rules "
+                         "as they were)")
     ap.add_argument("--busy-us", default="", metavar="SPEC",
                     help="the chip's BUSY per command, as a board spends it: "
                          "<command>:<us> entries separated by commas, the commands "
