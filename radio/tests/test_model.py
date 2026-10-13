@@ -874,6 +874,50 @@ def test_a_front_end_shapes_what_goes_out_and_what_the_chip_reads(chip):
     assert done.returncode == 0, done.stdout + done.stderr
 
 
+FALSE_BUSY_BOARD = json.dumps({"chip": "sx1262", "max_dbm": 22,
+                               "cad_false_busy": "sx1262.8:0.30,lr2021.8:0.70,7:0.05"})
+FALSE_BUSY_LOOKS = 300
+
+
+def busy_looks(chip, n):
+    """`n` CADs on a quiet channel, back to back: how many said busy."""
+    chip.configure(dio1=CAD_DONE)
+    busy = 0
+    for _ in range(n):
+        start_cad(chip)
+        chip.wait_irq(CAD_DONE)
+        busy += bool(chip.irq() & CAD_DETECTED)
+    return busy
+
+
+def test_without_a_boards_figure_a_quiet_channel_never_reads_busy(chip):
+    if os.environ.get("SIM_MESH_BOARD"):
+        pytest.skip("this process was given a board")
+    assert busy_looks(chip, 40) == 0
+
+
+def false_busy_case(chip):
+    """Run in a child told its board's false busy (physics v2's figure, which
+    the model reads once per process, busy.h): at the test's SF8 the board
+    says 30 % of looks on a quiet channel read busy, the lr2021 entry is not
+    this chip's, and the count lands within three sigmas of the figure."""
+    busy = busy_looks(chip, FALSE_BUSY_LOOKS)
+    assert abs(busy - 0.30 * FALSE_BUSY_LOOKS) <= 3.0 * (FALSE_BUSY_LOOKS * 0.30 * 0.70) ** 0.5, busy
+
+
+def test_a_quiet_channel_reads_busy_as_often_as_the_board_says(chip):
+    if os.environ.get("SIM_MESH_BOARD") == FALSE_BUSY_BOARD:
+        false_busy_case(chip)
+        return
+    env = dict(os.environ, SIM_MESH_BOARD=FALSE_BUSY_BOARD, SIM_MESH_SEED="11",
+               SIM_MESH_NODE_ID="7")
+    done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                           "%s::%s" % (os.path.abspath(__file__),
+                                       "test_a_quiet_channel_reads_busy_as_often_as_the_board_says")],
+                          env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
 # ---------------------------------------------------------------------------
 # The TCXO's start-up
 # ---------------------------------------------------------------------------

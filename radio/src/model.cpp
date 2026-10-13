@@ -444,6 +444,7 @@ struct ChipState {
      * air when the CAD looks. The medium tells a station about a frame only
      * while it listens, so this holds the frames that began while it did. */
     int64_t  heardEndUs = 0;
+    int64_t  cadStartUs = 0;    /* when the last CAD was commanded: its false-busy draw's key */
 
     /* Channel activity detection, as SetCadParams left it. */
     int      cadSymbols = 2;
@@ -1156,6 +1157,7 @@ extern "C" void simradio_transfer(simradio_t* c, const uint8_t* out, size_t len,
         /* The datasheet reports RX in the status byte during CAD; the wire
          * says CAD, which is what the medium delivers energy to. */
         setMode(d, "CAD", ST_RX);
+        d.cadStartUs = S()->now_us();
         double tSym = (double)((uint32_t)1 << d.sf) / (double)d.bwHz;
         /* The window opens once the radio is ready: BUSY fallen and the
          * reference started (`fillState`'s `readyAt`). */
@@ -1327,8 +1329,17 @@ void rxEndCb(void* arg)
     if (bits) raise(c, bits);
 }
 
+/* How often this chip's CAD reads a clear channel busy, from SIM_MESH_BOARD
+ * (busy.h), read once per process. */
+static const BoardFalseBusy& falseBusy()
+{
+    static const BoardFalseBusy b = readBoardFalseBusy("sx1262");
+    return b;
+}
+
 /* The CAD window is over: done, and detected if energy is in the air at this
- * antenna now. The chip then goes where SetCadParams said. */
+ * antenna now, or when the chip's own false busy says so (`falseBusyLook`).
+ * The chip then goes where SetCadParams said. */
 void cadDoneCb(void* arg)
 {
     auto* c = (simradio*)arg;
@@ -1336,7 +1347,8 @@ void cadDoneCb(void* arg)
     EtherState s;
     S()->lock();
     if (strcmp(d.mode, "CAD") != 0) { S()->unlock(); return; }   /* ended by a command */
-    bool detected = S()->now_us() < d.heardEndUs;
+    bool detected = S()->now_us() < d.heardEndUs
+                    || falseBusyLook(falseBusy(), d.sf, c->slot, d.cadStartUs);
     uint16_t bits = IRQ_CAD_DONE | (detected ? IRQ_CAD_DETECTED : 0);
     if (detected && d.cadExitMode == CAD_RX) setMode(d, "RX", ST_RX);
     else                                     setMode(d, "STDBY_RC", ST_STDBY_RC);

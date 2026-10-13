@@ -372,6 +372,7 @@ struct LrState {
     bool hdrOk = true;      /* the header's fate, known at rx_begin (VirtualRxBegin.hdrOk) */
     bool synced = true;     /* whether the locked frame's preamble lets the chip sync (modelRxBegin) */
     int64_t heardEndUs = 0;
+    int64_t cadStartUs = 0;     /* when the last CAD was commanded: its false-busy draw's key */
 
     int txId = 0;
 
@@ -1008,6 +1009,7 @@ extern "C" void simradio_transfer(simradio_t* c, const uint8_t* out, size_t len,
             break;
         case LORA_SET_CAD:
             d.mode = "CAD";
+            d.cadStartUs = now;
             dropLock(c);
             armOnce(c, &c->tCad, cadDoneCb,
                     busyUs + (int64_t)(d.cadSymbols * symbolSeconds(d) * 1e6));
@@ -1141,12 +1143,23 @@ void rxHdrCb(void* arg)
     raise(c, ok ? IRQ_HEADER_VALID : IRQ_HEADER_ERR);
 }
 
+/* How often this chip's CAD reads a clear channel busy, from SIM_MESH_BOARD
+ * (busy.h), read once per process. */
+static const BoardFalseBusy& falseBusy()
+{
+    static const BoardFalseBusy b = readBoardFalseBusy("lr2021");
+    return b;
+}
+
+/* The CAD window is over: detected if energy is in the air at this antenna
+ * now, or when the chip's own false busy says so (`falseBusyLook`). */
 void cadDoneCb(void* arg)
 {
     auto* c = (simradio*)arg;
     S()->lock();
     if (strcmp(c->st.mode, "CAD") != 0) { S()->unlock(); return; }
-    bool detected = S()->now_us() < c->st.heardEndUs;
+    bool detected = S()->now_us() < c->st.heardEndUs
+                    || falseBusyLook(falseBusy(), c->st.sf, c->slot, c->st.cadStartUs);
     S()->unlock();
     fallBack(c);
     raise(c, IRQ_CAD_DONE | (detected ? (uint32_t)IRQ_CAD_DETECTED : 0u));
