@@ -578,6 +578,76 @@ so a station that never said it had left `RX` would otherwise be told about
 frames arriving during its own, and a hidden terminal would look like a station
 ignoring what it could hear.
 
+## Physics v2
+
+`Physics(version=2, chips=…)`, or `--physics ether/physics-v2.yaml`: the
+rules above with what a bench measured on an SX1262 and an LR2021 on 13
+October 2026 put in place of three of their figures, a table per chip; which
+chip each station's radio is reaches the ether by direct call (`set_chips`,
+from simd, which knows each firmware's radio), as the loss table does, never
+over the wire. Nothing else moves, and without the tables every line runs
+as before: a run's record is the same to the byte.
+The file says what each figure assumes beyond the measurement; the tests in
+`test_physics_v2.py` replay the bench's own trials and curves against the
+rules and hold them within binomial bounds.
+
+- **Another spreading factor is noise.** At each of the three stages the
+  frame's level is read less `penalty_db`: the rise of the noise by every
+  in-band transmission at another spreading factor on the air at that
+  instant (summed in milliwatts) plus the receiver chip's own loss at the
+  frame's spreading factor. That loss (`Physics.chip_loss`) is fitted the
+  way `implementation_loss` is: the reference frame (40 bytes, CR 4/5)
+  fails one time in ten exactly at the chip's measured
+  signal-to-interference ratio, `sinr_limit_db`. The verdict's inter-SF
+  classes are not tested any more (the matrix stays for v1); the same-SF
+  class is. SF8 to SF12 are unmeasured and keep the curve's own limit.
+- **Two frames of one spreading factor** go through bench capture's two
+  decision points (`takes` at the lock, `bench_survives` at the verdict)
+  with `capture_outcome` in `bench_outcome`'s place: two draws for the pair
+  and the receiver, in turn. The later frame is received by the chip's share
+  for the part of the earlier frame it started in (`capture_part`: preamble
+  with the sync word, header, payload — the payload has no table, so never)
+  at the level difference; only when it is not, the earlier survives by its
+  curve's share at that difference (a logistic: half at `half_db`, 10 % to
+  90 % over `width_db`). So no pair ever delivers both, as on the bench, and
+  both are lost when neither draw passes, as the bench saw near the
+  capture threshold. The curve is the bench's marginal by the difference
+  alone: in the preamble close to the threshold the boards lost the earlier
+  frame more often than it says (the SX1262 at +1.5 dB: 1 of 20 against the
+  curve's 1 in 6), which the tables do not resolve. A receiver
+  that was not following the first frame when the second started is free to
+  lock on, as at a preamble. A spreading factor measured on its own has its
+  own tables (`capture_by_sf`: SF6 at 40 bytes against 40); the rest take
+  the chip's `capture`. A later frame that outlasts the earlier one meets
+  the same rules, as the bench found (never received from a payload start,
+  though most of it is in the clear). Where in the preamble a later frame
+  starts is not modelled: the bench has one pair of points for it.
+- **The SNR a delivered frame reports** is its signal over the noise and
+  everything on the air in its band during its last symbol (`end_snr_db`),
+  as both chips report it: a frame whose end another frame covers reads
+  about its lead over that frame, one whose end is in the clear its lead
+  over the noise (which the chip model caps as the chips do).
+- **A channel check across spreading factors.** A slot in CAD is told of a
+  frame on its carrier and bandwidth by the lock draw at the CAD's own
+  spreading factor, scaled by `Physics.sense_factor`: 1 for the frame's own
+  spreading factor, the chip's measured share for a neighbouring one
+  (`"<the check's SF>><the frame's SF>"`), 0 for one further off. The sense
+  threshold no longer reaches a CAD slot; an RX slot keeps it, which is what
+  an instantaneous RSSI reads. An LR2021's CCA command sits in mode `CAD` on
+  the wire too and would be told the same way; no firmware here issues it.
+- **False busy** is the chip's, not the medium's: `cadDoneCb` in each chip
+  model reads a clear channel busy by the board's share for its spreading
+  factor (`SIM_MESH_BOARD`'s `cad_false_busy`, which simd writes from the
+  tables), on a draw that is a hash of the run's seed, the station, the
+  slot and the look's start alone (radio/src/busy.cpp), so a run repeats
+  and the firmware's own randomness is untouched.
+
+What the bench did not cover and the tables assume: a later frame that
+outlasts the earlier one, other spreading factors and lengths for capture
+(SF5 and SF6 at 40 bytes against 40 bytes), weak levels for the channel
+check (the lock odds scale the share), SF5 against SF6 for the check (the
+neighbour's figures), and SF8-12 under another spreading factor.
+
 ## A frame's two names
 
 A station numbers its own transmissions and knows nothing of anyone else's, so

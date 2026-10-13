@@ -11,8 +11,8 @@ and knows a frame only as a carrier, a duration and a payload it never opens.
 ```sh
 python3 ether.py --bind 127.0.0.1:7000 --record record.tsv \
     --geodata <geodata.yaml> --nodeset <nodeset.yaml> --losses <dir> \
-    [--noise-figure 6] [--pairwise | --bench-capture] [--fading-db 0] [--coherence-s 3600]
-    [--rician-k K] [--seed N] [--time real|max|<k>x]```
+    [--noise-figure 6] [--pairwise | --bench-capture] [--physics FILE] [--fading-db 0]
+    [--coherence-s 3600] [--rician-k K] [--seed N] [--time real|max|<k>x]```
 
 Stations reach it through the testbed, which holds it in its own event loop and
 hands it the loss tables by direct call — see [`../README.md`](../README.md).
@@ -189,6 +189,28 @@ outcome is a draw from the seed, the pair and the receiver, so the lock and
 both verdicts read the same one. Against three or more frames of its class a
 frame's lead is over their sum. Inter-SF rejection and the three stages
 against noise are as without it.
+
+**Physics v2** (`--physics physics-v2.yaml`, or `Physics(version=2, chips=…)`)
+is the radio model as a bench measured it on an SX1262 and an LR2021 (13
+October 2026), a table per chip; which chip a station's radio is comes from
+whatever drives the run (`set_chips`: simd knows each firmware's radio), as
+the loss table does, never over the wire.
+Another spreading factor is noise: its power on the air is added to the
+noise the three stages read, and each chip's own loss against the curve
+comes from the ratio at which the bench saw a 40-byte frame fail one time
+in ten. Two frames of one spreading factor: the earlier survives by how much
+stronger the later is, alone; the later is received only when it starts in
+the earlier one's preamble or header, by the chip's share for that part, and
+never in its payload, where both are lost; a delivered frame reports the
+SNR of its last symbol, over the noise and whatever else is on the air then.
+A channel check (CAD) hears a
+frame at a neighbouring spreading factor as often as the chip did, one two
+away never, and reads a clear channel busy as often as the chip did (that
+last in the chip model, `SIM_MESH_BOARD`). The file says what each figure
+assumes beyond what was measured; INTERNALS.md "Physics v2" says where each
+rule decides, and `test_physics_v2.py` replays the bench's trials against
+them. Without the file every rule is as before, and a run's record is the
+same to the byte.
 
 **Every draw is the seed's and the channel's.** Each stage, each bench
 outcome, each Rician draw and each knot of fading is a hash of the seed
