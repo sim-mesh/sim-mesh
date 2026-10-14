@@ -7,7 +7,10 @@ what the board did, not only that its tables were typed in. The capture trials
 are bench/capture-trials-2026-10-13.csv and the inter-SF trials
 bench/inter-sf-trials-2026-10-13.csv (the reticulum project's
 docs/bench-results-2026-10-13, one trial a line); cells the bench adds to them
-join the checks as they are. Each test is named for the rule it holds.
+join the checks as they are. The channel check's looks (by frame part) and the
+sensitivity sweeps are bench/channel-looks-2026-10-14.csv and
+bench/sensitivity-steps-2026-10-14.csv (docs/bench-results-2026-10-14). Each
+test is named for the rule it holds.
 """
 import asyncio
 import base64
@@ -24,6 +27,8 @@ from test_ether import Air, FREQ, POWER_DBM, name, radio
 HERE = os.path.dirname(os.path.abspath(__file__))
 TRIALS = os.path.join(HERE, "bench", "capture-trials-2026-10-13.csv")
 INTER_SF_TRIALS = os.path.join(HERE, "bench", "inter-sf-trials-2026-10-13.csv")
+CHANNEL_LOOKS = os.path.join(HERE, "bench", "channel-looks-2026-10-14.csv")
+SENSITIVITY_STEPS = os.path.join(HERE, "bench", "sensitivity-steps-2026-10-14.csv")
 
 # The bench's frames: 125 kHz, CR 4/5, 16-symbol preambles; SF7 with the
 # earlier frame 120 bytes and the later 40 unless a trial says otherwise.
@@ -200,7 +205,8 @@ def test_the_interferer_weight_is_the_chips_figure_for_a_near_pair_and_zero_beyo
 
 def test_the_false_busy_entry_names_every_chip_and_sf():
     spec = ether_module.cad_false_busy_spec(tables()["chips"])
-    assert "lr2021.7:0.32" in spec.split(",") and "sx1262.5:0.07" in spec.split(",")
+    # lr2021 at its current det_peak (48); sx1262's own chip is unchanged.
+    assert "lr2021.7:0.03" in spec.split(",") and "sx1262.5:0.07" in spec.split(",")
     assert ether_module.cad_false_busy_spec(None) == ""
 
 
@@ -520,17 +526,31 @@ def test_without_the_other_frame_the_wanted_frame_always_arrives(v2):
 
 # ---- (c) a channel check across spreading factors ----------------------------
 
-def looks(v2, chip, slot_sf, frame_sf, n=400):
-    """A slot in CAD at `slot_sf`, a strong frame at `frame_sf` on the air:
-    how many of `n` looks are told of it."""
+def looks(v2, chip, slot_sf, frame_sf, n=400, offset_us=5_000):
+    """A frame at `frame_sf` on the air; a slot that enters CAD at `slot_sf`
+    `offset_us` into it -- inside the bench's preamble window by default
+    (past `CAD_PREAMBLE_LOOK_US`, short of its end at 20 ms). The slot is put
+    back off listening (`STDBY_RC`) before each trial's frame goes out, so
+    entering CAD afterwards is always a fresh `state` (`tell_late`) at the
+    one instant meant, never the frame's own start under a slot left over in
+    CAD from the trial before. How many of `n` such looks are told of it."""
     medium = fresh()
     air = Air(medium, {(1, 2): loss_for(LEVEL_DBM)}, seed=0,
-              states={1: {"sf": frame_sf}, 2: {"mode": "CAD", "sf": slot_sf}})
+              states={1: {"sf": frame_sf}, 2: {"mode": "STDBY_RC", "sf": slot_sf}})
     medium.set_chips({2: chip})
+
+    def set_mode(mode):
+        air.medium.recv_state(2, air.ADDR, dict({"type": "state", "slot": 0},
+                                                **radio(mode, sf=slot_sf)))
+
     told = 0
     for i in range(n):
         air.sent[:] = []
-        send(air, 1, 40, 1_000_000 * (i + 1), 20_000, 30_000, 100_000, sf=frame_sf)
+        t0 = 1_000_000 * (i + 1)
+        set_mode("STDBY_RC")
+        send(air, 1, 40, t0, 20_000, 30_000, 100_000, sf=frame_sf)
+        air.medium.clock.t = t0 + offset_us
+        set_mode("CAD")
         told += any(m.get("cad") for m in air.told(2, "rx_begin"))
     return told
 
@@ -541,15 +561,25 @@ def looks(v2, chip, slot_sf, frame_sf, n=400):
     ("lr2021", 5, 6, 0.61), ("lr2021", 6, 5, 0.58),
 ])
 def test_a_cad_hears_a_neighbouring_sf_as_often_as_the_chip_does(v2, chip, slot_sf, frame_sf, share):
+    """`sense_factor` scales the preamble table's own ceiling at the frame's
+    spreading factor (det_peak 48; SF5's sits well under 1.0, the bench's
+    own noisiest case there), not a bare 1.0 as the curve-only fallback
+    (an older config, without `cad_preamble`) would read instead."""
     n = 400
+    physics = ether_module.Physics(**tables())
+    ceiling = physics.cad_preamble(chip, frame_sf, 50.0)   # past the table: its top point
+    p = share * ceiling
     told = looks(v2, chip, slot_sf, frame_sf, n)
-    assert abs(told - share * n) <= 3.0 * math.sqrt(n * share * (1 - share)), told
-    assert looks(v2, chip, slot_sf, slot_sf, n) == n
+    assert abs(told - p * n) <= 3.0 * math.sqrt(n * p * (1 - p)) + 1.0, (told, p * n)
+    own = physics.cad_preamble(chip, slot_sf, 50.0)
+    same = looks(v2, chip, slot_sf, slot_sf, n)
+    assert abs(same - own * n) <= 3.0 * math.sqrt(n * own * (1 - own)) + 1.0, (same, own * n)
 
 
 def test_a_cad_two_spreading_factors_off_never_hears_it(v2):
     """SF5 and SF7, on either chip, in either direction (physics-v2.yaml
-    `sense`: no figure for "7>5" or "5>7")."""
+    `sense`: no figure for "7>5" or "5>7") -- `sense_factor` is 0 there, so
+    neither the preamble table nor its ceiling is ever read."""
     for chip in ("sx1262", "lr2021"):
         assert looks(v2, chip, 7, 5, 400) == 0
         assert looks(v2, chip, 5, 7, 400) == 0
@@ -562,3 +592,243 @@ def test_the_energy_threshold_still_serves_an_rssi_read_in_rx(v2):
     air = Air(v2, {(1, 2): loss_for(-60.0)}, seed=0, states={1: {"sf": 5}, 2: {"sf": 7}})
     send(air, 1, 40, 1_000_000, 5_000, 7_000, 25_000, sf=5)
     assert [m.get("cad") for m in air.told(2, "rx_begin")] == [True]
+
+
+# ---- (d) the channel check by frame part, and the per-board noise figure ---
+
+def _pav(cells):
+    """Pool-adjacent-violators on `[(x, hits, n), ...]` (x may repeat): merges
+    same-x cells, then adjacent groups while a later one's rate would
+    otherwise be lower, so the result is non-decreasing in x -- the same
+    pooling physics-v2.yaml's own tables are fitted by (its "adjacent cells
+    out of order pooled")."""
+    merged = {}
+    order = []
+    for x, hits, n in cells:
+        if x not in merged:
+            order.append(x)
+            merged[x] = [0, 0]
+        merged[x][0] += hits
+        merged[x][1] += n
+    groups = [[x, merged[x][0], merged[x][1]] for x in sorted(order)]
+    i = 0
+    while i < len(groups) - 1:
+        if groups[i][1] / groups[i][2] > groups[i + 1][1] / groups[i + 1][2]:
+            groups[i][1] += groups[i + 1][1]
+            groups[i][2] += groups[i + 1][2]
+            del groups[i + 1]
+            i = max(0, i - 1)
+        else:
+            i += 1
+    return [(x, h / n, n) for x, h, n in groups]
+
+
+def _snr_lookup():
+    with open(SENSITIVITY_STEPS, newline="") as handle:
+        return {(r["run_utc"], r["rx"], int(r["sf"]), float(r["atten_db"])): float(r["snr_med_db"])
+                for r in csv.DictReader(handle) if r["snr_med_db"]}
+
+
+def _preamble_cells(det_peak, snr_run="16:42"):
+    """channel-looks.csv's preamble looks (the 15:29 run, past its 2 ms cut),
+    by (sf, atten_db) -> (hits, n), each cell's SNR from `snr_run`'s steps at
+    the same spreading factor and attenuation -- the 15:29 run took no steps
+    of its own; the bench's own README reads SNR the same way. Returns (by
+    spreading factor, the pooled fit's input; every raw cell, for the check)."""
+    snr = _snr_lookup()
+    cells = collections.defaultdict(lambda: [0, 0])
+    with open(CHANNEL_LOOKS, newline="") as handle:
+        for row in csv.DictReader(handle):
+            if (row["where"] != "preamble" or row["run_utc"] != "15:29"
+                    or int(row["det_peak"]) != det_peak):
+                continue
+            if row["offset_ms"] == "" or float(row["offset_ms"]) < 2.0:
+                continue
+            key = (int(row["sf"]), float(row["atten_db"]))
+            cells[key][0] += int(row["hit"])
+            cells[key][1] += 1
+    by_sf, raw = collections.defaultdict(list), []
+    for (sf, atten), (hits, n) in cells.items():
+        s = snr.get((snr_run, "B", sf, atten))
+        if s is not None:
+            by_sf[sf].append((s, hits, n))
+            raw.append((sf, s, hits, n))
+    return by_sf, raw
+
+
+@pytest.mark.parametrize("det_peak", [40, 48, 56])
+def test_the_cad_preamble_table_replays_the_bench_by_det_peak(det_peak):
+    """Points pooled fresh from the bench's own cells at each det_peak (48
+    ships; 40 and 56 besides, to hold the model's form and not only the one
+    det_peak that does) reproduce every one of those cells' counts within
+    binomial bounds -- the proof the curve does what the LR2021 did. At 48,
+    the shipped table itself (not a fresh fit) is held to the same cells."""
+    if not os.path.exists(CHANNEL_LOOKS) or not os.path.exists(SENSITIVITY_STEPS):
+        pytest.skip("no channel-looks.csv/sensitivity-steps.csv beside this file")
+    by_sf, raw = _preamble_cells(det_peak)
+    assert raw, det_peak
+    table = {sf: [(x, p) for x, p, _ in _pav(sorted(cells))] for sf, cells in by_sf.items()}
+    off = [(sf, s, hits, n) for sf, s, hits, n in raw
+          if binomial_p(hits, n, ether_module.interp(table[sf], s)) < 0.01]
+    assert not off, off
+    if det_peak == 48:
+        physics = ether_module.Physics(**tables())
+        off = [(sf, s, hits, n) for sf, s, hits, n in raw
+              if binomial_p(hits, n, physics.cad_preamble("lr2021", sf, s)) < 0.01]
+        assert not off, off
+
+
+def test_the_payload_excess_is_the_lr2021s_own_sf7_alone():
+    """0 everywhere but the LR2021's own SF7 (physics-v2.yaml
+    `cad_payload_excess`): the bench found nothing past the gap rate's own
+    spread at any other spreading factor, on either chip."""
+    physics = ether_module.Physics(**tables())
+    for chip in ("sx1262", "lr2021"):
+        for sf in (5, 6, 7):
+            if (chip, sf) != ("lr2021", 7):
+                assert physics.cad_payload_excess(chip, sf) == 0.0, (chip, sf)
+    assert physics.cad_payload_excess("lr2021", 7) == pytest.approx(0.07)
+
+
+def test_a_look_past_the_preamble_reads_the_payload_excess_exactly(v2):
+    """Past the preamble (`cad_look_part`), `sensed`'s draw -- the same one a
+    preamble look would have read -- is held against `cad_payload_excess`
+    alone, never the chip's own false-busy rate too (that is the chip
+    model's unconditional contribution, `cadDoneCb`, not the ether's; adding
+    it here would count it twice)."""
+    medium = v2
+    air = Air(medium, {(1, 2): loss_for(LEVEL_DBM)}, seed=0,
+              states={1: {"sf": 7}, 2: {"mode": "STDBY_RC", "sf": 7}})
+    medium.set_chips({2: "lr2021"})
+    t0 = 1_000_000
+    send(air, 1, 40, t0, 20_000, 30_000, 100_000, sf=7)
+    frame = medium.frames[-1]
+    now = t0 + 50_000                     # well past the preamble, inside the payload
+    assert medium.cad_look_part(frame, now) == "payload"
+    expected = medium.draw(frame, 2, 0, "lock") < medium.physics.cad_payload_excess("lr2021", 7)
+    air.medium.clock.t = now
+    medium.recv_state(2, air.ADDR, dict({"type": "state", "slot": 0}, **radio("CAD", sf=7)))
+    told = any(m.get("cad") for m in air.told(2, "rx_begin"))
+    assert told == expected
+
+
+def test_the_noise_figure_offset_raises_only_the_receivers_own_floor(v2):
+    """`noise_figure_offset_db` -- chip-keyed, as every other v2 table here
+    names a receiver's radio (`chip_of`), not by board: the ether never
+    sees "RAK" or "XIAO", so a run that mixes boards of one chip reads one
+    figure. Added to the medium's one figure for that chip's receiver
+    alone; a receiver without a chip of its own, or without a figure, reads
+    the medium's bare."""
+    medium = v2
+    medium.set_chips({1: "sx1262", 2: "lr2021"})
+    assert medium.noise(125_000, 1) == medium.noise(125_000)             # sx1262: the reference
+    assert medium.noise(125_000, 2) == pytest.approx(medium.noise(125_000) + 6.2)
+    assert medium.noise(125_000, 999) == medium.noise(125_000)           # unset: the default chip
+    assert medium.noise(125_000) == medium.noise(125_000, None)
+
+
+def test_interference_that_dominates_washes_the_noise_figure_out(v2):
+    """Where another spreading factor's power is well over the noise, a
+    frame's reported SNR (`end_snr_db`) stops moving with the receiver's own
+    figure: SINR is the interferer's business there, not the receiver's
+    (physics v2's per-chip noise-figure offset, b)."""
+    snr = {}
+    for chip in ("sx1262", "lr2021"):
+        medium = fresh()
+        air = Air(medium, {(1, 3): loss_for(LEVEL_DBM), (2, 3): loss_for(LEVEL_DBM)}, seed=0,
+                  states={1: {"sf": 7}, 2: {"sf": 6}, 3: {"sf": 7}})
+        medium.set_chips({3: chip})
+        t0 = 1_000_000
+        send(air, 2, 120, t0, 20_000, 30_000, 200_000, sf=6)        # the interferer, well inside
+        eid = send(air, 1, 40, t0 + 50_000, 20_000, 30_000, 100_000, sf=7)
+        air.run_to(t0 + 400_000)
+        got = ends(air, 3).get(eid)
+        assert got is not None and got[0] == "clean", got
+        snr[chip] = got[1]
+    assert abs(snr["sx1262"] - snr["lr2021"]) <= 1.0, snr
+
+
+def _fifty_pct_atten(rows):
+    """Linear-interpolated attenuator dB at which delivered/expected crosses
+    0.5, from `[(atten_db, delivered, expected), ...]`."""
+    prev = None
+    for atten, delivered, expected in sorted(rows):
+        frac = delivered / expected if expected else 0.0
+        if prev is not None:
+            a0, f0 = prev
+            if f0 >= 0.5 >= frac and f0 != frac:
+                return a0 + (f0 - 0.5) / (f0 - frac) * (atten - a0)
+        prev = (atten, frac)
+    return None
+
+
+def test_the_sensitivity_knee_gap_matches_the_bench_per_board():
+    """The fitted `noise_figure_offset_db` (b): at equal transmit power, the
+    LR2021 board's 50 %-delivered point sits this many dB of attenuation
+    short of the SX1262's, within about 1 dB, averaged over its two sweeps a
+    spreading factor and over all three (sensitivity-steps.csv, 14 October
+    2026) -- the bench's own gap, not a number only typed into the yaml. SF5
+    alone, the bench's noisiest (its own SNR estimate "hardly moves"), is
+    held to a wider 2 dB."""
+    if not os.path.exists(SENSITIVITY_STEPS):
+        pytest.skip("no sensitivity-steps.csv beside this file")
+    with open(SENSITIVITY_STEPS, newline="") as handle:
+        steps = list(csv.DictReader(handle))
+
+    def fifty(run_utc, rx, sf):
+        rows = [(float(s["atten_db"]), int(s["delivered"]), int(s["expected"]))
+                for s in steps if s["run_utc"] == run_utc and s["rx"] == rx
+                and int(s["sf"]) == sf and s["kind"] in ("coarse", "fine")]
+        return _fifty_pct_atten(rows)
+
+    def tx(run_utc, rx):
+        return float({s["tx_dbm"] for s in steps
+                     if s["run_utc"] == run_utc and s["rx"] == rx}.pop())
+
+    offset = ether_module.Physics(**tables()).noise_figure_offset_db("lr2021")
+    gaps = []
+    for sf, r_run in ((7, "11:35"), (6, "12:50"), (5, "13:09")):
+        r50 = fifty(r_run, "R", sf)
+        per_b_run = [r50 - (fifty(b_run, "B", sf) - (tx(b_run, "B") - tx(r_run, "R")))
+                    for b_run in ("14:05", "16:42")]
+        gaps.append(sum(per_b_run) / len(per_b_run))
+    assert abs(sum(gaps) / len(gaps) - offset) <= 1.0, (gaps, offset)
+    assert abs(gaps[0] - offset) <= 1.0 and abs(gaps[1] - offset) <= 1.0, gaps    # SF7, SF6
+    assert abs(gaps[2] - offset) <= 2.0, gaps                                     # SF5
+
+
+def test_physics_v2_cad_and_noise_draws_are_deterministic(v2):
+    """Two runs of the same instant draw the same: the by-part CAD look and
+    the noise-figure-shifted decode both read one seeded draw, as v2 always
+    has (`seeded_draw`)."""
+    def once():
+        medium = fresh()
+        air = Air(medium, {(1, 2): loss_for(LEVEL_DBM)}, seed=7,
+                  states={1: {"sf": 6}, 2: {"mode": "STDBY_RC", "sf": 7}})
+        medium.set_chips({2: "lr2021"})
+        t0 = 1_000_000
+        send(air, 1, 40, t0, 20_000, 30_000, 100_000, sf=6)
+        air.medium.clock.t = t0 + 5_000
+        air.medium.recv_state(2, air.ADDR, dict({"type": "state", "slot": 0}, **radio("CAD", sf=7)))
+        return [m.get("cad") for m in air.told(2, "rx_begin")]
+    assert once() == once()
+
+
+def test_without_the_new_keys_a_cad_and_the_noise_read_as_they_did_at_33adb3c(v2):
+    """`cad_preamble`/`cad_payload_excess`/`noise_figure_offset_db` absent (an
+    older physics-v2.yaml): a CAD senses by the curve alone (`locks_on`) and
+    a receiver's noise is the medium's one figure -- unchanged."""
+    old_chips = {chip: {k: v for k, v in table.items()
+                        if k not in ("cad_preamble", "cad_payload_excess",
+                                      "noise_figure_offset_db")}
+                for chip, table in tables()["chips"].items()}
+    medium = ether_module.Ether(None, physics=ether_module.Physics(version=2, chips=old_chips))
+    medium.set_chips({1: "sx1262", 2: "lr2021"})
+    assert medium.noise(125_000, 2) == medium.noise(125_000, 1) == medium.noise(125_000)
+    air = Air(medium, {(1, 2): loss_for(LEVEL_DBM)}, seed=0,
+              states={1: {"sf": 6}, 2: {"mode": "CAD", "sf": 7}})
+    medium.set_chips({2: "lr2021"})
+    send(air, 1, 40, 1_000_000, 20_000, 30_000, 100_000, sf=6)
+    # The old curve-only odds at this level and pair (sense 0.70 times a lock
+    # odds effectively 1.0, far over the floor): told, as 33adb3c had it.
+    assert any(m.get("cad") for m in air.told(2, "rx_begin"))

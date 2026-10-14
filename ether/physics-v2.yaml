@@ -81,6 +81,20 @@ chips:
     # SF5 against SF6, 14 October 2026: its own figures, net of false
     # alarms, no longer SF6 against SF7's by the neighbour rule.
     sense: {"6>7": 0.38, "7>6": 0.23, "5>6": 0.23, "6>5": 0.14}
+    # A CAD at this chip's own spreading factor, by the part of a frame on
+    # the air a look falls in (`Ether.cad_look_part`): in the preamble, from
+    # about 2 ms after it started to the preamble's end, the hit rate by
+    # SNR; past it, `cad_payload_excess` alone (none measured for this chip,
+    # so none applies). This chip had no preamble looks on the 14 October
+    # 2026 bench (reticulum docs/bench-results-2026-10-14/, channel-looks.csv
+    # is the LR2021's, B, alone): its SNR-domain curve stands in here, an
+    # assumption -- the two chips decode at much the same SNR by their own
+    # estimate (sensitivity-steps.csv), so the figure may read close, but
+    # nothing measured this chip's own CAD correlator against it.
+    cad_preamble:
+      5: [[-4.2, 0.45], [-3.5, 0.64], [-3.2, 0.68]]
+      6: [[-7.2, 0.76], [-6.5, 0.78], [-5.5, 0.94], [-5.0, 0.96], [-4.0, 1.00]]
+      7: [[-9.5, 0.72], [-8.8, 0.92], [-7.8, 0.98]]
     # How often a channel check reads a clear channel busy, per look, by its
     # spreading factor, the looks taken as independent: what a send meets,
     # the lock first and then the CAD at the det_peak the firmware shipped
@@ -117,4 +131,48 @@ chips:
           preamble: [[0.2, 0.00], [1.9, 0.86], [3.0, 0.95]]
           header: [[0.2, 0.00], [1.9, 0.33], [3.0, 1.00]]
     sense: {"6>7": 0.70, "7>6": 0.60, "5>6": 0.61, "6>5": 0.58}
-    cad_false_busy: {5: 0.18, 6: 0.23, 7: 0.32}
+    # This chip's own CAD, by the part of a frame on the air a look falls in
+    # (`Ether.cad_look_part`): in the preamble, from about 2 ms after the
+    # frame started (the bench's own cut: hits rise from +1 ms, are full by
+    # +2 ms) to the preamble's end, the hit rate by SNR, at det_peak 48
+    # (15:29 run, channel-looks.csv, 30 looks a cell before the cut, 10-18 at
+    # SF5; 14 October 2026). Monotone, adjacent cells out of order pooled,
+    # as `capture`'s tables; every raw cell checked against this one's
+    # prediction, two-sided binomial, holds (`test_physics_v2.py`). SF5 is
+    # the noisiest of the three, as its `sense` and `cad_false_busy` already
+    # are. Past the preamble, hits run near the empty channel's own rate --
+    # `cad_payload_excess` alone carries the one exception found.
+    cad_preamble:
+      5: [[-4.2, 0.45], [-3.5, 0.64], [-3.2, 0.68]]
+      6: [[-7.2, 0.76], [-6.5, 0.78], [-5.5, 0.94], [-5.0, 0.96], [-4.0, 1.00]]
+      7: [[-9.5, 0.72], [-8.8, 0.92], [-7.8, 0.98]]
+    # Past the preamble, a CAD at SF7 finds a frame a little more than an
+    # empty channel, at det_peak 48 to 56, even 10-15 dB over the noise
+    # (19:48 run, A out of its tin, channel-looks.csv): 8, 11 and 15 points
+    # over that run's own paired gap looks (100 a cell). No other spreading
+    # factor, and no lower det_peak, showed a figure past the gap rate's own
+    # spread. At det_peak 48, the one the LR2021 driver ships at SF5-7.
+    cad_payload_excess: {7: 0.07}
+    # As the SX1262's, at this chip's own det_peak: 48 at SF5-7 now (14
+    # October 2026 bench, the gap looks pooled over both payload runs,
+    # channel-looks.csv), where 40 -- this chip's previous det_peak -- read
+    # 0.19/0.24/0.29.
+    cad_false_busy: {5: 0.01, 6: 0.02, 7: 0.03}
+    # This board's receiver against the SX1262's, fitted from
+    # sensitivity-steps.csv (14 October 2026): at equal transmit power, on
+    # the same path, it loses half its frames 4.9-5.8 dB of attenuation
+    # earlier at SF7, 5.5-5.7 at SF6, 7.5-7.7 at SF5 (two sweeps a spreading
+    # factor, R's power corrected to match B's); both chips decode at about
+    # the same SNR by their own estimate, so the gap is this board's own
+    # receive noise figure, not a sensitivity its curve already carries.
+    # Mean of the six 4.9-7.7 dB gaps; SF5's two are the widest and its
+    # sweeps the noisiest (the bench's own README calls its SNR estimate
+    # rough). Added to `noise_figure_db` for this chip's receiver alone
+    # (`Ether.noise`); where interference already dominates a frame's SINR
+    # it is unmoved by it (`Ether.interference_rise_db` reads the same
+    # raised floor and the offset cancels out of the sum the two feed).
+    # Keyed by chip, as the sim already names a receiver's radio for every
+    # other v2 table here (`Ether.chip_of`): the ether never sees "RAK" or
+    # "XIAO", only "sx1262"/"lr2021", and a board with no chip entry of its
+    # own takes the default chip's, as everything else in this file does.
+    noise_figure_offset_db: 6.2
