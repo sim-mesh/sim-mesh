@@ -263,6 +263,14 @@ V2_REFERENCE = {"payload": 40, "cr": 5, "implicit": False, "crc": True, "bw": 12
                 "per": 0.10}
 DEFAULT_CHIP = "sx1262"     # a station the run named no chip for (`Ether.set_chips`)
 
+# Physics v2, by frame part (`chips.<chip>.cad_preamble`, `.cad_payload_excess`;
+# reticulum docs/bench-results-2026-10-14/, channel-looks.csv, 14 October
+# 2026): a CAD's hits rise from 1 ms after a frame starts and are full by
+# 2 ms, so a look this soon or later, and still short of the preamble's own
+# end, reads the bench's preamble table (`Ether.cad_look_part`); the bench's
+# own tables below are counted from this cut.
+CAD_PREAMBLE_LOOK_US = 2_000.0
+
 # What follows the preamble before `t_pre`: two sync-word symbols and 2.25 of
 # the start-of-frame delimiter (AN1200.13), so a frame's preamble proper ends
 # this many symbols before the `t_pre` its transmitter states.
@@ -824,6 +832,33 @@ class Physics:
             return 0.0
         return float((self.chip(name).get("interferer_weight_db") or {}).get(
             "%d<%d" % (wanted_sf, interferer_sf), 0.0))
+
+    def cad_preamble(self, name, sf, snr_db):
+        """How often a CAD at `sf`'s own spreading factor detects a frame at
+        `sf` while inside its preamble (`Ether.cad_look_part`), by SNR: a
+        table of points (channel-looks.csv), 0 for a spreading factor
+        without one. The chip's figure for a neighbouring spreading factor
+        is `sense_factor`, applied to this one (`Ether.sensed`)."""
+        points = (self.chip(name).get("cad_preamble") or {}).get(sf)
+        if points is None:
+            points = (self.chip(name).get("cad_preamble") or {}).get(str(sf))
+        return interp(points, snr_db) if points else 0.0
+
+    def cad_payload_excess(self, name, sf):
+        """How much more a CAD at `sf` detects a frame at `sf` once past its
+        preamble than the chip's own false-busy rate there, which the chip
+        model already contributes on every look (`cad_false_busy`,
+        unconditionally): the bench's figure, 0 for a spreading factor
+        without one — every pair but the LR2021's own SF7."""
+        table = self.chip(name).get("cad_payload_excess") or {}
+        return float(table.get(sf, table.get(str(sf), 0.0)))
+
+    def noise_figure_offset_db(self, name):
+        """How much more this chip's receiver adds to the medium's noise
+        figure, in dB, beyond `noise_figure_db`: its own thermal noise alone
+        (`Ether.noise`), fitted where measured (sensitivity-steps.csv), 0 for
+        a chip without one — the reference the others are measured against."""
+        return float(self.chip(name).get("noise_figure_offset_db", 0.0))
 
     # Sergey's fork (sergeyculum) named this same spread/coherence/Rician
     # setting by an older model's terms (slow + fast terms, two draws per
@@ -1707,10 +1742,21 @@ class Ether(asyncio.DatagramProtocol):
             frame.levels[rsid] = self.level(frame.sid, rsid, frame.freq, frame.power_dbm)
         return frame.levels[rsid]
 
-    def noise(self, bw_hz):
-        """A receiver's noise floor in dBm for this bandwidth: kTB plus the figure."""
+    def noise(self, bw_hz, rsid=None):
+        """A receiver's noise floor in dBm for this bandwidth: kTB plus the
+        figure, plus physics v2's per-chip offset for whichever chip `rsid`'s
+        radio is (`Physics.noise_figure_offset_db`) -- that receiver's own
+        thermal noise alone. Where another transmission's power already
+        dominates a frame's noise, the offset washes out of the sum the two
+        feed (`interference_rise_db`, which reads this same raised floor):
+        SINR is the interferer's business there, not the receiver's. `rsid`
+        is physics v2's alone; omitted, or under v1, the medium's one figure
+        stands as it always has."""
+        figure = self.physics.noise_figure_db
+        if rsid is not None and self.physics.v2:
+            figure += self.physics.noise_figure_offset_db(self.chip_of(rsid))
         return (THERMAL_DBM_PER_HZ + 10.0 * math.log10(max(float(bw_hz or 125_000), 1.0))
-                + self.physics.noise_figure_db)
+                + figure)
 
     def sensitivity(self, sf):
         """The datasheet's SNR for this spreading factor, in dB: where the
@@ -1724,13 +1770,15 @@ class Ether(asyncio.DatagramProtocol):
             return False
         return level >= self.noise(bw_hz) + self.sensitivity(sf)
 
-    def symbol_error_at(self, frame, level, sf=None):
+    def symbol_error_at(self, frame, level, sf=None, rsid=None):
         """The chance one symbol of `frame` is demodulated wrong at `level`:
         the curve at its SNR less the chip's implementation loss. `sf` reads
         the curve at another spreading factor: a CAD's own, hearing a frame
-        at a neighbouring one (`sensed`)."""
+        at a neighbouring one (`sensed`'s fallback). `rsid` reads that
+        receiver's own noise figure under physics v2 (`noise`); omitted, the
+        medium's one figure stands."""
         sf = frame.sf if sf is None else sf
-        return symbol_error(sf, level - self.noise(frame.bw) - implementation_loss(sf))
+        return symbol_error(sf, level - self.noise(frame.bw, rsid) - implementation_loss(sf))
 
     def fade_db(self, a, b, t_us):
         """How far the link between stations a and b sits from the table's
@@ -1819,7 +1867,7 @@ class Ether(asyncio.DatagramProtocol):
         if level is None:
             return False
         odds = lock_odds(self.symbol_error_at(
-            frame, level - self.penalty_db(frame, rsid, now), sf)) * factor
+            frame, level - self.penalty_db(frame, rsid, now), sf, rsid=rsid)) * factor
         if det:
             odds *= 1.0 - side_preamble_miss(frame.pre_symbols)
         return self.draw(frame, rsid, slot, "lock") < odds
@@ -1832,7 +1880,7 @@ class Ether(asyncio.DatagramProtocol):
             return True
         at = (frame.pre_us + frame.hdr_us) / 2.0
         level = self.level_at(frame, rsid, at)
-        p = self.symbol_error_at(frame, level - self.penalty_db(frame, rsid, at))
+        p = self.symbol_error_at(frame, level - self.penalty_db(frame, rsid, at), rsid=rsid)
         return (self.draw(frame, rsid, slot, "hdr")
                 < block_survives(p, FIRST_BLOCK_SYMBOLS, True))
 
@@ -1861,7 +1909,7 @@ class Ether(asyncio.DatagramProtocol):
         odds = 1.0
         for level, n, correcting, at in blocks:
             odds *= block_survives(
-                self.symbol_error_at(frame, level - self.penalty_db(frame, rsid, at)),
+                self.symbol_error_at(frame, level - self.penalty_db(frame, rsid, at), rsid=rsid),
                 n, correcting)
         return self.draw(frame, rsid, reception.slot, "payload") < odds
 
@@ -2478,29 +2526,42 @@ class Ether(asyncio.DatagramProtocol):
             mw += term
         return mw
 
+    def interference_rise_db(self, frame, rsid, t_us):
+        """How far `frame`'s noise floor at `rsid` rises at `t_us`, in dB, for
+        every other-spreading-factor transmission on the air then, their
+        powers summed in milliwatts and weighted by the chip's offset for the
+        pair (`Physics.interferer_weight_db`): 0 with none. Reads `rsid`'s own
+        noise figure (`noise`) as the floor the rise is taken over, so where
+        this rise is the bigger term in a sum the receiver also adds its own
+        figure to (`penalty_db`, a CAD's SNR in `sensed`), that figure cancels
+        out of it: SINR is the interferer's business there, not the
+        receiver's (physics v2's per-chip noise-figure offset, b)."""
+        mw = self.interference_mw(frame, rsid, t_us, other_sf_only=True, weigh=True)
+        if mw <= 0.0:
+            return 0.0
+        noise_mw = dbm_to_mw(self.noise(frame.bw, rsid))
+        return 10.0 * math.log10((noise_mw + mw) / noise_mw)
+
     def penalty_db(self, frame, rsid, t_us):
         """Physics v2: what `frame` is charged at `rsid` at instant `t_us`, in
         dB of signal-to-noise ratio: the noise's rise by every transmission in
-        its band at another spreading factor on the air then, their powers
-        summed in milliwatts and weighted by the chip's offset for the pair
-        (`Physics.interferer_weight_db`), plus the receiver chip's own loss at
-        the frame's spreading factor (`Physics.chip_loss`). Nothing under v1,
+        its band at another spreading factor on the air then
+        (`interference_rise_db`), plus the receiver chip's own loss at the
+        frame's spreading factor (`Physics.chip_loss`). Nothing under v1,
         where another spreading factor is a rejection figure (`verdict_for`)."""
         if not self.physics.v2:
             return 0.0
-        mw = self.interference_mw(frame, rsid, t_us, other_sf_only=True, weigh=True)
-        rise = 0.0
-        if mw > 0.0:
-            noise_mw = dbm_to_mw(self.noise(frame.bw))
-            rise = 10.0 * math.log10((noise_mw + mw) / noise_mw)
-        return rise + self.physics.chip_loss(self.chip_of(rsid), frame.sf)
+        return (self.interference_rise_db(frame, rsid, t_us)
+                + self.physics.chip_loss(self.chip_of(rsid), frame.sf))
 
     def end_snr_db(self, frame, rsid, level):
         """Physics v2: the SNR a delivered frame reports, its signal over the
         noise and everything on the air in its band during its last symbol,
         as both chips report it: a frame whose end another covers reads
         about its lead over that one, a frame whose end is in the clear its
-        lead over the noise."""
+        lead over the noise (that receiver's own, `noise`'s per-chip offset
+        included: a noisier board reports a worse SNR for the same signal,
+        as the bench's two chips did)."""
         try:
             symbol_us = (1 << int(frame.sf)) / float(frame.bw or 125_000) * 1e6
         except (TypeError, ValueError):
@@ -2508,22 +2569,61 @@ class Ether(asyncio.DatagramProtocol):
         at = max(frame.start_us, frame.end_us - symbol_us / 2.0)
         mw = self.interference_mw(frame, rsid, at, other_sf_only=False)
         signal = self.level_at(frame, rsid, at)
-        return (level if signal is None else signal) - mw_to_dbm(dbm_to_mw(self.noise(frame.bw)) + mw)
+        return (level if signal is None else signal) - mw_to_dbm(
+            dbm_to_mw(self.noise(frame.bw, rsid)) + mw)
 
     def sensed(self, frame, rstation, slot, state, now):
         """Physics v2: whether a CAD at this slot hears `frame` at `now`. Only
-        on the slot's carrier and bandwidth; the curve is read at the CAD's
-        own spreading factor and the lock odds are scaled by the chip's figure
-        for the pair (`Physics.sense_factor`): 1 for the frame's own, the
-        measured share for a neighbouring one, 0 further off. The lock's draw,
-        so a CAD that heard a frame and the receive that follows agree."""
+        on the slot's carrier and bandwidth, and never for a pair two
+        spreading factors apart (`Physics.sense_factor`, 0 there).
+
+        With the bench's by-part tables (`Physics.cad_preamble`,
+        `.cad_payload_excess`; absent -- an older config -- the curve at the
+        CAD's own spreading factor, as v2 always did): the part of `frame`
+        the look falls in (`cad_look_part`) picks the rule. In the preamble,
+        the table by SNR at the frame's own spreading factor, scaled by the
+        chip's figure for a neighbouring one (`sense_factor`, applied to the
+        preamble figure alone -- the bench did not measure a neighbour's by
+        part, so this stays the one assumption it always was). Elsewhere, the
+        measured excess over the chip's own false-busy rate there (which the
+        chip model already contributes on every look, unconditionally), on
+        the frame's own spreading factor only -- the bench found nothing
+        worth modelling on a neighbouring one.
+
+        The lock's draw either way, so a CAD that heard a frame and the
+        receive that follows share the one random number -- even where the
+        two now read it by different rules, as the bench's own CAD and
+        decode odds also part ways once a frame is weak enough."""
         if (not same_carrier(state.get("freq"), frame.freq, state.get("bw"))
                 or state.get("bw") != frame.bw):
             return False
-        factor = self.physics.sense_factor(self.chip_of(rstation.sid), state.get("sf"), frame.sf)
+        chip, slot_sf = self.chip_of(rstation.sid), state.get("sf")
+        factor = self.physics.sense_factor(chip, slot_sf, frame.sf)
         if factor <= 0.0:
             return False
-        return self.locks_on(frame, rstation.sid, slot, now, sf=state.get("sf"), factor=factor)
+        if "cad_preamble" not in self.physics.chip(chip):
+            return self.locks_on(frame, rstation.sid, slot, now, sf=slot_sf, factor=factor)
+        if self.cad_look_part(frame, now) == "preamble":
+            snr_db = (self.level_at(frame, rstation.sid, now)
+                     - self.noise(frame.bw, rstation.sid)
+                     - self.interference_rise_db(frame, rstation.sid, now))
+            p = self.physics.cad_preamble(chip, frame.sf, snr_db) * factor
+        elif slot_sf == frame.sf:
+            p = self.physics.cad_payload_excess(chip, frame.sf)
+        else:
+            p = 0.0
+        return self.draw(frame, rstation.sid, slot, "lock") < p
+
+    @staticmethod
+    def cad_look_part(frame, t_us):
+        """Physics v2's CAD: the part of `frame` a sensing look at `t_us`
+        reads by (`sensed`) -- its preamble, from `CAD_PREAMBLE_LOOK_US`
+        after it started (too soon before that: the bench's hits were not yet
+        full) to the preamble's end, or else its payload. The header folds
+        into the payload figure; the bench's own looks never told the two
+        apart."""
+        return ("preamble" if frame.start_us + CAD_PREAMBLE_LOOK_US <= t_us < frame.pre_us
+                else "payload")
 
     @staticmethod
     def capture_part(frame, t_us):
