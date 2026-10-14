@@ -174,6 +174,28 @@ def test_the_sense_factor_is_one_for_its_own_sf_measured_for_a_neighbour_and_zer
     assert physics.sense_factor("sx1262", 7, 6) == pytest.approx(0.23)
     assert physics.sense_factor("sx1262", 7, 5) == 0.0
     assert physics.sense_factor("sx1262", None, 5) == 0.0
+    # The neighbour pair measured on its own, 14 October 2026, not borrowed
+    # from SF6-against-SF7 by the neighbour rule any more.
+    assert physics.sense_factor("sx1262", 5, 6) == pytest.approx(0.23)
+    assert physics.sense_factor("sx1262", 6, 5) == pytest.approx(0.14)
+    assert physics.sense_factor("lr2021", 5, 6) == pytest.approx(0.61)
+    assert physics.sense_factor("lr2021", 6, 5) == pytest.approx(0.58)
+
+
+def test_the_interferer_weight_is_the_chips_figure_for_a_near_pair_and_zero_beyond():
+    """`interferer_weight_db` (ether.py `penalty_db`'s sum): 0 for the far
+    pair each wanted spreading factor is itself anchored on, the chip's
+    figure for the near pair, 0 beyond, where its power stands as it is."""
+    physics = ether_module.Physics(**tables())
+    assert physics.interferer_weight_db("sx1262", 7, 5) == 0.0     # its own anchor
+    assert physics.interferer_weight_db("sx1262", 7, 6) == pytest.approx(0.9)
+    assert physics.interferer_weight_db("sx1262", 5, 6) == pytest.approx(1.1)
+    assert physics.interferer_weight_db("sx1262", 6, 5) == pytest.approx(1.4)
+    assert physics.interferer_weight_db("lr2021", 7, 6) == pytest.approx(0.8)
+    assert physics.interferer_weight_db("lr2021", 5, 6) == pytest.approx(1.5)
+    assert physics.interferer_weight_db("lr2021", 6, 5) == pytest.approx(0.75)
+    assert physics.interferer_weight_db("sx1262", 5, 12) == 0.0    # unlisted
+    assert physics.interferer_weight_db("sx1262", None, 6) == 0.0
 
 
 def test_the_false_busy_entry_names_every_chip_and_sf():
@@ -400,22 +422,28 @@ def crossing(per, at):
     return None
 
 
-# B5's eight curves (13 October 2026, normal images, the LR2021's side
+# B5's twelve curves (13-14 October 2026, normal images, the LR2021's side
 # detectors off): (chip, the wanted SF, the interfering SF) -> the SIR at
 # which the wanted 40-byte frame was lost one time in ten, and one time in a
-# hundred. SF7's table figure is the mean of its two pairs.
+# hundred where the bench reported it (None: PER 10 % only). Each wanted SF
+# is anchored on its far pair (SF5 and SF6 under SF7, SF7 under SF5, mean of
+# its two runs where there were two): that pair's `interferer_weight_db` is
+# 0, and the near pair's pulls the one curve to its own figure.
 B5 = {("sx1262", 5, 7): (-2.2, -1.2), ("sx1262", 6, 7): (-5.3, -3.1),
       ("sx1262", 7, 5): (-8.3, -7.5), ("sx1262", 7, 6): (-7.4, -6.3),
-      ("lr2021", 5, 7): (-3.8, -2.9), ("lr2021", 6, 7): (-5.6, -3.7),
-      ("lr2021", 7, 5): (-8.9, -8.0), ("lr2021", 7, 6): (-8.1, -7.2)}
+      ("sx1262", 5, 6): (-1.1, None), ("sx1262", 6, 5): (-3.9, None),
+      ("lr2021", 5, 7): (-3.7, -2.65), ("lr2021", 6, 7): (-5.55, -4.0),
+      ("lr2021", 7, 5): (-8.9, -8.0), ("lr2021", 7, 6): (-8.1, -7.2),
+      ("lr2021", 5, 6): (-2.2, None), ("lr2021", 6, 5): (-4.8, None)}
 
 
 @pytest.mark.parametrize("chip,wanted_sf,other_sf", sorted(B5))
 def test_another_sf_is_noise_and_the_curve_sits_where_the_bench_measured(v2, chip, wanted_sf, other_sf):
-    """The bench's eight curves: the error rate is 10 % within 0.6 dB of the
-    pair's measured ratio (SF7's two pairs sit either side of their mean),
-    it falls from 10 % to 1 % over 0.8 to 2.2 dB as the bench's do, and from
-    90 % to 10 % over 1.5 to 3.5 dB, whichever spreading factor interferes."""
+    """The bench's twelve curves: the error rate is 10 % within 0.6 dB of the
+    pair's measured ratio (the near pair's curve pulled to its own figure by
+    `interferer_weight_db`), it falls from 10 % to 1 % over 0.8 to 2.2 dB as
+    the bench's do where it reported one, and from 90 % to 10 % over 1.5 to
+    3.5 dB, whichever spreading factor interferes."""
     at_10_bench, at_1_bench = B5[(chip, wanted_sf, other_sf)]
     limit = v2.physics.chip(chip)["sinr_limit_db"][wanted_sf]
     sirs = [round(limit - 3.0 + 0.5 * i, 1) for i in range(13)]
@@ -425,7 +453,8 @@ def test_another_sf_is_noise_and_the_curve_sits_where_the_bench_measured(v2, chi
     assert at_1 is not None and 0.8 <= at_1 - at_10 <= 2.2, (per, at_10, at_1)
     assert at_90 is not None and 1.5 <= at_10 - at_90 <= 3.5, per
     assert per[sirs[-1]] <= 0.01 and per[sirs[0]] >= 0.99, per
-    assert 0.8 <= at_1_bench - at_10_bench <= 2.2    # the bench's own span, as stated
+    # The bench's own span, where it reported a 1 % figure to check it against.
+    assert at_1_bench is None or 0.8 <= at_1_bench - at_10_bench <= 2.2
 
 
 def inter_sf_points():
@@ -506,13 +535,24 @@ def looks(v2, chip, slot_sf, frame_sf, n=400):
     return told
 
 
-@pytest.mark.parametrize("chip,share", [("sx1262", 0.23), ("lr2021", 0.60)])
-def test_a_cad_hears_a_neighbouring_sf_as_often_as_the_chip_does(v2, chip, share):
+@pytest.mark.parametrize("chip,slot_sf,frame_sf,share", [
+    ("sx1262", 7, 6, 0.23), ("lr2021", 7, 6, 0.60),
+    ("sx1262", 5, 6, 0.23), ("sx1262", 6, 5, 0.14),
+    ("lr2021", 5, 6, 0.61), ("lr2021", 6, 5, 0.58),
+])
+def test_a_cad_hears_a_neighbouring_sf_as_often_as_the_chip_does(v2, chip, slot_sf, frame_sf, share):
     n = 400
-    told = looks(v2, chip, 7, 6, n)
+    told = looks(v2, chip, slot_sf, frame_sf, n)
     assert abs(told - share * n) <= 3.0 * math.sqrt(n * share * (1 - share)), told
-    assert looks(v2, chip, 7, 5, n) == 0
-    assert looks(v2, chip, 7, 7, n) == n
+    assert looks(v2, chip, slot_sf, slot_sf, n) == n
+
+
+def test_a_cad_two_spreading_factors_off_never_hears_it(v2):
+    """SF5 and SF7, on either chip, in either direction (physics-v2.yaml
+    `sense`: no figure for "7>5" or "5>7")."""
+    for chip in ("sx1262", "lr2021"):
+        assert looks(v2, chip, 7, 5, 400) == 0
+        assert looks(v2, chip, 5, 7, 400) == 0
 
 
 def test_the_energy_threshold_still_serves_an_rssi_read_in_rx(v2):

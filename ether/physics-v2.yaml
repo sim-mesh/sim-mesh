@@ -15,14 +15,22 @@ chips:
   sx1262:
     # Another spreading factor is noise: the signal-to-interference ratio at
     # which the reference frame at this spreading factor fails one time in
-    # ten under a frame at another one (B5, eight curves). Measured: SF5
-    # under SF7 -2.2 (1 % at -1.2), SF6 under SF7 -5.3 (-3.1), SF7 under SF5
-    # -8.3 (-7.5) and under SF6 -7.4 (-6.3); SF7 takes the mean of its two
-    # pairs. From 10 % to 1 % the bench's curves span 0.8-2.2 dB. SF8 to
-    # SF12 are unmeasured and take the curve's own limit (the datasheet's
-    # SNR), which an SX1272 measurement (ether.py's INTER_SF_REJECTION_DB)
-    # puts 1-5 dB on the pessimistic side there.
-    sinr_limit_db: {5: -2.2, 6: -5.3, 7: -7.85}
+    # ten under a frame at another one (B5, twelve curves, 13-14 October
+    # 2026). Measured: SF5 under SF6 -1.1, under SF7 -2.2 (1 % at -1.2); SF6
+    # under SF5 -3.9, under SF7 -5.3 (-3.1); SF7 under SF5 -8.3 (-7.5) and
+    # under SF6 -7.4 (-6.3). From 10 % to 1 % the bench's curves span
+    # 0.8-2.2 dB. SF8 to SF12 are unmeasured and take the curve's own limit
+    # (the datasheet's SNR), which an SX1272 measurement (ether.py's
+    # INTER_SF_REJECTION_DB) puts 1-5 dB on the pessimistic side there.
+    sinr_limit_db: {5: -2.2, 6: -5.3, 7: -8.3}
+    # Each wanted spreading factor is anchored on one measured pair above
+    # (SF5 and SF6 under SF7, SF7 under SF5): the other pair's interferer is
+    # counted at this dB offset first, inside `penalty_db`'s sum
+    # (Σ P·10^(w/10)), so the one curve reads both pairs right. Keyed
+    # "<wanted><interferer>"; 0 for a pair without a figure, where its power
+    # stands as it is — every pair two spreading factors off, and the far
+    # pair each wanted spreading factor is itself anchored on.
+    interferer_weight_db: {"5<6": 1.1, "6<5": 1.4, "7<6": 0.9}
     # Two frames of one spreading factor at one receiver, the later one
     # starting inside the earlier one, by d = the later's level less the
     # earlier's at the receiver, in dB (1,939 trials at SF7; the earlier
@@ -70,9 +78,9 @@ chips:
     # does, on either chip, in either direction: a pair not listed is 0.
     # Measured at -30 to -41 dBm only; at weak levels the lock odds at the
     # check's own spreading factor scale the figure, which is an assumption.
-    # SF5 against SF6 is unmeasured and is given SF6 against SF7's figures
-    # by the neighbour rule.
-    sense: {"6>7": 0.38, "7>6": 0.23, "5>6": 0.38, "6>5": 0.23}
+    # SF5 against SF6, 14 October 2026: its own figures, net of false
+    # alarms, no longer SF6 against SF7's by the neighbour rule.
+    sense: {"6>7": 0.38, "7>6": 0.23, "5>6": 0.23, "6>5": 0.14}
     # How often a channel check reads a clear channel busy, per look, by its
     # spreading factor, the looks taken as independent: what a send meets,
     # the lock first and then the CAD at the det_peak the firmware shipped
@@ -84,10 +92,14 @@ chips:
     # (radio/src/busy.h), the ether passes them on in SIM_MESH_BOARD.
     cad_false_busy: {5: 0.07, 6: 0.10, 7: 0.13}
   lr2021:
-    # As for the SX1262, the LR2021's own figures: SF5 under SF7 -3.8 (1 %
-    # at -2.9; a repeat -3.6/-2.4), SF6 under SF7 -5.6 (-3.7; -5.5/-4.3),
-    # SF7 under SF5 -8.9 (-8.0) and under SF6 -8.1 (-7.2), SF7 their mean.
-    sinr_limit_db: {5: -3.8, 6: -5.6, 7: -8.5}
+    # As for the SX1262, the LR2021's own figures: SF5 under SF6 -2.2, under
+    # SF7 -3.7 (two runs -3.8/-2.9, -3.6/-2.4); SF6 under SF5 -4.8, under
+    # SF7 -5.55 (two runs -5.6/-3.7, -5.5/-4.3); SF7 under SF5 -8.9 (-8.0)
+    # and under SF6 -8.1 (-7.2).
+    sinr_limit_db: {5: -3.7, 6: -5.55, 7: -8.9}
+    # As the SX1262's: SF5 and SF6 anchored under SF7, SF7 under SF5; the
+    # other pair's interferer counted at this dB offset first.
+    interferer_weight_db: {"5<6": 1.5, "6<5": 0.75, "7<6": 0.8}
     # Fitted as the SX1262's: 1,315 trials at SF7, both lengths pooled.
     capture:
       earlier: {half_db: 1.0, width_db: 2.2}
@@ -104,5 +116,5 @@ chips:
         later:
           preamble: [[0.2, 0.00], [1.9, 0.86], [3.0, 0.95]]
           header: [[0.2, 0.00], [1.9, 0.33], [3.0, 1.00]]
-    sense: {"6>7": 0.70, "7>6": 0.60, "5>6": 0.70, "6>5": 0.60}
+    sense: {"6>7": 0.70, "7>6": 0.60, "5>6": 0.61, "6>5": 0.58}
     cad_false_busy: {5: 0.18, 6: 0.23, 7: 0.32}
