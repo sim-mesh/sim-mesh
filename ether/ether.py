@@ -812,6 +812,19 @@ class Physics:
             return 1.0
         return float((self.chip(name).get("sense") or {}).get("%d>%d" % (slot_sf, frame_sf), 0.0))
 
+    def interferer_weight_db(self, name, wanted_sf, interferer_sf):
+        """How much more, in dB, another spreading factor's power counts as
+        noise against `wanted_sf` (`penalty_db`'s sum): the chip's figure for
+        the pair `"<wanted><interferer>"`, 0 where it has none — the far pair
+        `sinr_limit_db[wanted_sf]` is itself anchored on, and any pair the
+        bench did not measure, read at its own power."""
+        try:
+            wanted_sf, interferer_sf = int(wanted_sf), int(interferer_sf)
+        except (TypeError, ValueError):
+            return 0.0
+        return float((self.chip(name).get("interferer_weight_db") or {}).get(
+            "%d<%d" % (wanted_sf, interferer_sf), 0.0))
+
     # Sergey's fork (sergeyculum) named this same spread/coherence/Rician
     # setting by an older model's terms (slow + fast terms, two draws per
     # link). Read-only aliases, so a script of its that reads a Physics back
@@ -2443,30 +2456,39 @@ class Ether(asyncio.DatagramProtocol):
         """The chip a station's radio is (`set_chips`), for physics v2's tables."""
         return self.chips.get(rsid, DEFAULT_CHIP)
 
-    def interference_mw(self, frame, rsid, t_us, other_sf_only):
+    def interference_mw(self, frame, rsid, t_us, other_sf_only, weigh=False):
         """The power, in milliwatts at `rsid`, of every transmission in
         `frame`'s band on the air at instant `t_us`: at another spreading
-        factor only, or at any."""
+        factor only, or at any. `weigh` scales each such term by the chip's
+        offset for the pair (`Physics.interferer_weight_db`): `penalty_db`
+        alone asks for it, never `end_snr_db`, which reports what is really
+        on the air, not the curve's calibration trick."""
         mw = 0.0
         for other in frame.interferers:
             if (other_sf_only and other.sf == frame.sf) \
                     or not other.start_us <= t_us < other.end_us:
                 continue
             level = self.level_at(other, rsid, t_us)
-            if level is not None:
-                mw += dbm_to_mw(level)
+            if level is None:
+                continue
+            term = dbm_to_mw(level)
+            if weigh:
+                term *= 10.0 ** (self.physics.interferer_weight_db(
+                    self.chip_of(rsid), frame.sf, other.sf) / 10.0)
+            mw += term
         return mw
 
     def penalty_db(self, frame, rsid, t_us):
         """Physics v2: what `frame` is charged at `rsid` at instant `t_us`, in
         dB of signal-to-noise ratio: the noise's rise by every transmission in
         its band at another spreading factor on the air then, their powers
-        summed in milliwatts, plus the receiver chip's own loss at the frame's
-        spreading factor (`Physics.chip_loss`). Nothing under v1, where
-        another spreading factor is a rejection figure (`verdict_for`)."""
+        summed in milliwatts and weighted by the chip's offset for the pair
+        (`Physics.interferer_weight_db`), plus the receiver chip's own loss at
+        the frame's spreading factor (`Physics.chip_loss`). Nothing under v1,
+        where another spreading factor is a rejection figure (`verdict_for`)."""
         if not self.physics.v2:
             return 0.0
-        mw = self.interference_mw(frame, rsid, t_us, other_sf_only=True)
+        mw = self.interference_mw(frame, rsid, t_us, other_sf_only=True, weigh=True)
         rise = 0.0
         if mw > 0.0:
             noise_mw = dbm_to_mw(self.noise(frame.bw))
