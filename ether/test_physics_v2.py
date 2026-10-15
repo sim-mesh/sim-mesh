@@ -9,8 +9,12 @@ bench/inter-sf-trials-2026-10-13.csv (the reticulum project's
 docs/bench-results-2026-10-13, one trial a line); cells the bench adds to them
 join the checks as they are. The channel check's looks (by frame part) and the
 sensitivity sweeps are bench/channel-looks-2026-10-14.csv and
-bench/sensitivity-steps-2026-10-14.csv (docs/bench-results-2026-10-14). Each
-test is named for the rule it holds.
+bench/sensitivity-steps-2026-10-14.csv (docs/bench-results-2026-10-14). The
+15 October refit (ether/physics-v2-frame.yaml) replays
+bench/channel-looks-2026-10-15-agg.csv, this file's own aggregate of
+docs/bench-results-2026-10-15's 13,299 looks (chip, SF, SNR, hits, n), the
+raw file being too large to ship as a fixture. Each test is named for the
+rule it holds.
 """
 import asyncio
 import base64
@@ -29,6 +33,8 @@ TRIALS = os.path.join(HERE, "bench", "capture-trials-2026-10-13.csv")
 INTER_SF_TRIALS = os.path.join(HERE, "bench", "inter-sf-trials-2026-10-13.csv")
 CHANNEL_LOOKS = os.path.join(HERE, "bench", "channel-looks-2026-10-14.csv")
 SENSITIVITY_STEPS = os.path.join(HERE, "bench", "sensitivity-steps-2026-10-14.csv")
+FRAME_YAML = os.path.join(HERE, "physics-v2-frame.yaml")
+CHANNEL_LOOKS_15 = os.path.join(HERE, "bench", "channel-looks-2026-10-15-agg.csv")
 
 # The bench's frames: 125 kHz, CR 4/5, 16-symbol preambles; SF7 with the
 # earlier frame 120 bytes and the later 40 unless a trial says otherwise.
@@ -57,6 +63,11 @@ def timings(sf, payload_len):
 
 def tables():
     return ether_module.read_physics_file(ether_module.PHYSICS_V2_FILE)
+
+
+def frame_tables():
+    """physics-v2-frame.yaml's tables, the 15 October channel-check refit."""
+    return ether_module.read_physics_file(FRAME_YAML)
 
 
 @pytest.fixture
@@ -832,3 +843,102 @@ def test_without_the_new_keys_a_cad_and_the_noise_read_as_they_did_at_33adb3c(v2
     # The old curve-only odds at this level and pair (sense 0.70 times a lock
     # odds effectively 1.0, far over the floor): told, as 33adb3c had it.
     assert any(m.get("cad") for m in air.told(2, "rx_begin"))
+
+
+# ---- (e) the channel check refit: the whole frame, not the preamble alone --
+
+def _frame_cells(kind):
+    """channel-looks-2026-10-15-agg.csv's rows of `kind` ("frame", by (chip,
+    sf) -> [(snr, hits, n), ...]; "gap", by (chip, sf) -> (hits, n), pooled)."""
+    with open(CHANNEL_LOOKS_15, newline="") as handle:
+        rows = [r for r in csv.DictReader(handle) if r["kind"] == kind]
+    if kind == "gap":
+        out = collections.defaultdict(lambda: [0, 0])
+        for r in rows:
+            out[(r["chip"], int(r["sf"]))][0] += int(r["hits"])
+            out[(r["chip"], int(r["sf"]))][1] += int(r["n"])
+        return out
+    out = collections.defaultdict(list)
+    for r in rows:
+        out[(r["chip"], int(r["sf"]))].append((float(r["snr_db"]), int(r["hits"]), int(r["n"])))
+    return out
+
+
+@pytest.mark.parametrize("chip,sf", [("sx1262", 5), ("sx1262", 6), ("sx1262", 7),
+                                     ("lr2021", 5), ("lr2021", 6), ("lr2021", 7)])
+def test_the_frame_table_replays_the_15_october_bench(chip, sf):
+    """`cad_frame`'s points (physics-v2-frame.yaml), pooled fresh from the
+    aggregate as the shipped table was, reproduce every one of its cells
+    within binomial bounds, at most one in nine or ten -- the 14 October
+    preamble table's own check allowed two in about 70. The shipped table
+    itself, not only a fresh fit, holds the same cells."""
+    if not os.path.exists(CHANNEL_LOOKS_15):
+        pytest.skip("no channel-looks-2026-10-15-agg.csv beside this file")
+    cells = _frame_cells("frame")[(chip, sf)]
+    assert cells, (chip, sf)
+    points = [(x, p) for x, p, _ in _pav(sorted(cells))]
+    off = [(round(s, 2), h, n) for s, h, n in cells
+          if binomial_p(h, n, ether_module.interp(points, s)) < 0.01]
+    assert len(off) <= 1, off
+    physics = ether_module.Physics(**frame_tables())
+    off = [(round(s, 2), h, n) for s, h, n in cells
+          if binomial_p(h, n, physics.cad_frame(chip, sf, s)) < 0.01]
+    assert len(off) <= 1, off
+
+
+def test_the_frame_false_busy_matches_the_15_october_gaps():
+    """`cad_false_busy` (physics-v2-frame.yaml): each chip's own figure, at
+    its own det_peak, sits within a point of the aggregate's gap rate."""
+    if not os.path.exists(CHANNEL_LOOKS_15):
+        pytest.skip("no channel-looks-2026-10-15-agg.csv beside this file")
+    physics = ether_module.Physics(**frame_tables())
+    for (chip, sf), (hits, n) in _frame_cells("gap").items():
+        shipped = physics.chips[chip]["cad_false_busy"][sf]
+        assert abs(shipped - hits / n) <= 0.01, (chip, sf, shipped, hits / n)
+
+
+def test_sensed_prefers_cad_frame_over_cad_preamble(v2):
+    """Where a chip has both tables (no shipped one does; a hand-built
+    config might), `cad_frame` wins -- the tier order in `sensed`."""
+    chips = {"lr2021": dict(tables()["chips"]["lr2021"], cad_frame={7: [[-50.0, 1.0]]})}
+    medium = ether_module.Ether(None, physics=ether_module.Physics(version=2, chips=chips))
+    air = Air(medium, {(1, 2): loss_for(LEVEL_DBM)}, seed=0,
+              states={1: {"sf": 7}, 2: {"mode": "STDBY_RC", "sf": 7}})
+    medium.set_chips({2: "lr2021"})
+    t0 = 1_000_000
+    send(air, 1, 40, t0, 20_000, 30_000, 100_000, sf=7)
+    air.medium.clock.t = t0 + 50_000       # the payload: cad_preamble would read near 0 here
+    medium.recv_state(2, air.ADDR, dict({"type": "state", "slot": 0}, **radio("CAD", sf=7)))
+    assert any(m.get("cad") for m in air.told(2, "rx_begin"))
+
+
+def test_physics_v2_frame_yaml_falls_back_to_33adb3c_without_cad_frame(v2):
+    """physics-v2-frame.yaml's own chips, `cad_frame` taken out (it has no
+    `cad_preamble` to fall to first): a CAD senses by the curve alone,
+    unchanged from 33adb3c -- as `test_without_the_new_keys_...` already
+    proves for physics-v2.yaml's chips, which never had `cad_frame` either."""
+    stripped = {chip: {k: v for k, v in table.items() if k != "cad_frame"}
+               for chip, table in frame_tables()["chips"].items()}
+    medium = ether_module.Ether(None, physics=ether_module.Physics(version=2, chips=stripped))
+    medium.set_chips({1: "sx1262", 2: "lr2021"})
+    air = Air(medium, {(1, 2): loss_for(LEVEL_DBM)}, seed=0,
+              states={1: {"sf": 6}, 2: {"mode": "CAD", "sf": 7}})
+    medium.set_chips({2: "lr2021"})
+    send(air, 1, 40, 1_000_000, 20_000, 30_000, 100_000, sf=6)
+    assert any(m.get("cad") for m in air.told(2, "rx_begin"))
+
+
+def test_cad_frame_draws_are_deterministic(v2):
+    """Two runs of the same instant draw the same (`seeded_draw`), the
+    whole-frame tier included."""
+    def once():
+        medium = ether_module.Ether(None, physics=ether_module.Physics(**frame_tables()))
+        air = Air(medium, {(1, 2): loss_for(LEVEL_DBM)}, seed=7,
+                  states={1: {"sf": 7}, 2: {"mode": "STDBY_RC", "sf": 7}})
+        medium.set_chips({2: "lr2021"})
+        t0 = 1_000_000
+        send(air, 1, 40, t0, 20_000, 30_000, 100_000, sf=7)
+        air.medium.clock.t = t0 + 50_000
+        air.medium.recv_state(2, air.ADDR, dict({"type": "state", "slot": 0}, **radio("CAD", sf=7)))
+        return [m.get("cad") for m in air.told(2, "rx_begin")]
+    assert once() == once()
