@@ -18,9 +18,12 @@ station, the time shim, answers the C library's clocks, sleeps and timeouts
 with simulated time, and random numbers come from the run's seed, so a run
 can be reproduced.
 
-A firmware that keeps to this contract runs on sim-mesh with nothing of it in
-sim-mesh, and sim-mesh runs any such firmware. **Must**, **must not** and
-**may** are requirements; everything else describes.
+Any firmware that keeps to this contract runs on sim-mesh, without sim-mesh
+needing to know anything about it. **Must**, **must not** and **may** are
+requirements; everything else describes.
+
+Short version: link against the virtual radio (§10), write a driver (§6,
+full example in §11), zip it with a `node.yaml` (§1, §2).
 
 ```
 project ── its own script ──► <base>_<arch>_<version>.zip ──► sim firmware add ──► firmware/<name>/
@@ -156,9 +159,8 @@ stands still while any station is still busy, then jumps straight to the next
 moment something is due to happen. Most firmware works this way without
 changes, as long as it keeps the four promises below.
 
-In a real-time run a station keeps the host's time. In a virtual-time run the
-ether owns conductor time T and moves it only when every station is idle
-(§8), and a station keeps four promises:
+In real time a station just uses the host's clock. In virtual time the ether
+owns conductor time T (§8), and the four promises are:
 
 - **It reads time only through the C library or the radio library.** The
   time shim answers `clock_gettime`, `gettimeofday`, `time`, the sleeps,
@@ -175,15 +177,15 @@ ether owns conductor time T and moves it only when every station is idle
   (`simradio_wake_at`). Either the host calls `simradio_idle()` itself, a
   scheduler's idle with a wake at its next due tick and timer, or its driver
   sets `SIM_MESH_IDLE=threads` and the shim keeps a census of its threads. A
-  station that says neither is reported idle by the radio library's
-  watchdog, 20 ms of wall time after every message once none of its threads
-  is on the CPU: it runs, but crawls.
+  station that does neither is declared idle by a watchdog in the radio
+  library, 20 ms of wall time after each message once none of its threads is
+  running. It works, but slowly.
 - **It reads its console and talks TCP to other stations through the C
   library**: `read` on descriptor 0, and `read`/`recv`/`send`/`write` on its
   sockets. The shim counts those bytes for the ether, which holds T until a
   station has read what it was sent; a station that has read its input owes
-  an idle for the work it does on it. Input taken another way holds T a
-  second of wall time each time, or, under strict time, for good.
+  an idle for the work it does on it. Input read any other way stalls the
+  clock for a second of wall time each time, or forever under strict time.
 
 **Strict time.** Ordinarily the host's speed can still leak into a run: a
 station that stays busy past the watchdog has T moved under it by however
@@ -201,7 +203,7 @@ seed and epoch match line for line:
   instant takes 1 000 reads;
 - input a station has not read holds T however long its host takes.
 
-In return, nothing the ether says reaches the host piecemeal. The radio
+In return, the ether's messages reach the firmware whole. The radio
 library applies a datagram whole, the chip's own timers running as T moves,
 before the host is told of any of it: the host's waits that fall due,
 `simradio_on_advance` and DIO1 come after, so a thread woken at T finds all
