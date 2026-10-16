@@ -146,11 +146,13 @@ verbs are every firmware's (`sim_mesh.driver`) and a category's
 (`sim_mesh.reticulum.driver`, `sim_mesh.meshcore.driver`,
 `sim_mesh.meshtastic.driver`); with `category`,
 a meta is only for the chosen stations of that category, and one that leaves
-none of them is an error. `lxmf.send` takes `to`, a node or an LXMF
+none of them is an error. `lxmf.send` and `lxmf.send_route` (T185's
+CMD_LXMF_SEND_ROUTE, `lxmf.send` with `routes`) take `to`, a node or an LXMF
 identity, whose address is asked of its station first, and `path` may (or
-`dest_hash` and `iface`, or nothing for the whole table); `lxmf.send` may
-take `from`, its sender the same way, in place of a choice of stations, and
-is answered with each message's id, which simd gives it; `peer_tcp` takes
+`dest_hash` and `iface`, or nothing for the whole table); either `lxmf.send`
+or `lxmf.send_route` may take `from`, its sender the same way, in place of a
+choice of stations, and is answered with each message's id, which simd
+gives it; `peer_tcp` takes
 `to` and `port`. With `category: meshcore`, `msg`, `path` and `reset_path`
 take `to`, a contact's name (a node's own, once it has advertised it),
 passed as it is, and `msg` and `chan` are answered with each message's id.
@@ -215,6 +217,9 @@ NODE_FIELDS = ("id", "lat", "lon", "height_m", "height_from", "max_dbm", "antenn
 CLEARABLE_FIELDS = ("max_dbm",)
 EVENTS_FILE = "events.jsonl"  # what drivers report, a JSON object a line
 NAMED_VERBS = ("name", "lxmf.create")  # verbs whose `name` is the node's own unless given
+# T185: CMD_LXMF_SEND_ROUTE, `lxmf.send` with `routes` (sim_mesh.library),
+# takes `to` and answers with a message's id exactly as `lxmf.send` does.
+LXMF_SEND_VERBS = ("lxmf.send", "lxmf.send_route")
 MESHCORE_TO_VERBS = ("msg", "path", "reset_path")   # `to`, a contact's name, is their `dest`
 MESHCORE_MID_VERBS = ("msg", "chan")                # answered with the message's id
 MESHTASTIC_TO_VERBS = ("sendtext", "traceroute")    # `to`, a node's name, is their `dest`
@@ -1790,11 +1795,12 @@ class Simd:
     async def do_meta(self, msg):
         """A verb on the stations chosen, each through its own driver.
 
-        `lxmf.send` and `path` name the other end (`to`) by node or LXMF
-        identity, whose address is asked of its station once (`path` may
-        name none, for the whole table); `lxmf.send`
-        may name its sender (`from`) the same way, which then chooses the
-        station, and answers with the message's id, given here. `peer_tcp`
+        `lxmf.send`, `lxmf.send_route` (T185) and `path` name the other end
+        (`to`) by node or LXMF identity, whose address is asked of its
+        station once (`path` may name none, for the whole table); either of
+        the first two may name its sender (`from`) the same way, which then
+        chooses the station, and answers with the message's id, given
+        here. `peer_tcp`
         names its other end by node, for its address in this run's network.
         Any other verb's reply is what the driver returned.
         """
@@ -1821,10 +1827,10 @@ class Simd:
         category = msg.get("category")
         meshcore = category == "meshcore"
         meshtastic = category == "meshtastic"
-        mid_verb = (verb == "lxmf.send" or (meshcore and verb in MESHCORE_MID_VERBS)
+        mid_verb = (verb in LXMF_SEND_VERBS or (meshcore and verb in MESHCORE_MID_VERBS)
                     or (meshtastic and verb in MESHTASTIC_MID_VERBS))
-        if verb == "lxmf.send" and not to:
-            raise drivers_module.CommandError("lxmf.send needs `to`, a node or an LXMF identity")
+        if verb in LXMF_SEND_VERBS and not to:
+            raise drivers_module.CommandError("%s needs `to`, a node or an LXMF identity" % verb)
         if meshcore and verb in MESHCORE_TO_VERBS:
             if not to:
                 raise drivers_module.CommandError("%s needs `to`, a contact's name" % verb)
@@ -1835,11 +1841,11 @@ class Simd:
                 args["dest"] = str(to)
             elif verb != "sendtext":
                 raise drivers_module.CommandError("%s needs `to`, a node's name" % verb)
-        elif verb in ("lxmf.send", "path") and to:
+        elif (verb in LXMF_SEND_VERBS or verb == "path") and to:
             args["dest"] = await self.address_of(to)
         elif verb == "peer_tcp":
             args["addr"] = stations_module.bind_addr(self.nodeset.node(to)["id"])
-        if verb == "lxmf.send" and sender:
+        if verb in LXMF_SEND_VERBS and sender:
             node, args["sender"] = await self.lxmf_holder(sender)
             targets = [(n, s) for n, s in self.chosen({}) if n == node]
             if not targets:
