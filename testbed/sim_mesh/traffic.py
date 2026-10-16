@@ -36,6 +36,13 @@ Phases, each skipped when its option says so:
             characters, two-frame 115-300, and 420-650 (over 500 B on the
             wire: a link and a resource), weighted 167 : 76 : 39. Every text
             starts with its marker, `marker` and a four-digit number.
+
+            T185: `routes`, a mapping {(src, dst): routes} or a function
+            `(src, dst) -> routes` (`library.build_routes`'s, through
+            `library.route_tags`), sends that pair by `lxmf.send_route`
+            instead, its routes recorded on the send as `routes`. A pair
+            `routes` says nothing for (no entry, or the function answers
+            `None`) sends by plain `lxmf.send`, as every pair already did.
   drain     `drain` seconds after the last send slot.
   gather    with `gather`, every station's `diagnostics`.
   snapshot  end_snapshot, when given.
@@ -64,7 +71,7 @@ OPTIONS = {"warm_rounds": 3, "warm_spread": 300.0, "warm_gap": 120.0,
            "settle_every": 180.0, "settle_max": 3600.0, "warm_snapshot": None,
            "traffic": 3600.0, "every": 5.0, "seed": 17, "marker": "G", "drain": 600.0,
            "gather": True, "end_snapshot": None,
-           "arrivals": "even", "hub": None, "hub_share": 0.5, "pairs": 0}
+           "arrivals": "even", "hub": None, "hub_share": 0.5, "pairs": 0, "routes": None}
 ARRIVALS = ("even", "poisson")
 
 WORDS = ("mesh relay gateway lora packet announce proof link path hop station "
@@ -163,7 +170,16 @@ async def run_on(sim, opts, out_path):
     if isinstance(opts, dict):
         opts = Options(**opts)
     result = sim.result
-    result.update({"args": dict(vars(opts)), "phases": [], "wall_start": time.time()})
+    args = dict(vars(opts))
+    # `routes` is a mapping (its keys pairs, not strings) or a function,
+    # neither JSON-safe: `args` is written as this run's own record of what
+    # it was asked for, so it keeps a plain summary instead. Every send's
+    # own `routes` (below) still carries the real ones, in full.
+    if callable(args.get("routes")):
+        args["routes"] = "function"
+    elif args.get("routes"):
+        args["routes"] = "%d pair(s)" % len(args["routes"])
+    result.update({"args": args, "phases": [], "wall_start": time.time()})
 
     def phase(name):
         result["phases"].append([name, round(time.time(), 3), sim.t])
@@ -192,6 +208,19 @@ def meta(verb, category=None, **args):
     if category is not None:
         out["category"] = category
     return out
+
+
+def routes_for(routes_opt, src, dst):
+    """What `opts.routes` says for this (`src`, `dst`): a list of routes
+    (`library.route_tags()`'s own shape), or `None` for an ordinary,
+    un-routed send. `routes_opt` is a {(src, dst): routes} mapping, a
+    function `(src, dst) -> routes` (`None` where it says nothing), or
+    `None` for no routed sends at all."""
+    if routes_opt is None:
+        return None
+    if callable(routes_opt):
+        return routes_opt(src, dst)
+    return routes_opt.get((src, dst))
 
 
 async def run_phases(opts, sim, result, phase, dump):
@@ -293,6 +322,14 @@ async def run_phases(opts, sim, result, phase, dump):
             if dst not in dests:
                 rec["error"] = "recipient has no destination"
                 return
+            # T185: this pair's routes, if `opts.routes` says any — a send
+            # with routes goes by `lxmf.send_route` instead of `lxmf.send`,
+            # the only difference from an ordinary send below.
+            routes = routes_for(opts.routes, src, dst)
+            send_step = meta("lxmf.send_route", "reticulum", to=dst, routes=routes, text=text) \
+                if routes else meta("lxmf.send", "reticulum", to=dst, text=text)
+            if routes:
+                rec["routes"] = routes
             # The route and the send as one sequence, so both happen at the
             # T the message is due, with no round trip to here between them.
             # The `after` (never less than a millisecond) makes it a task of
@@ -300,8 +337,7 @@ async def run_phases(opts, sim, result, phase, dump):
             # socket's reader, which holds every later message behind it.
             try:
                 results, t = await sim.sequence(
-                    [meta("path", "reticulum", to=dst),
-                     meta("lxmf.send", "reticulum", to=dst, text=text)], [src],
+                    [meta("path", "reticulum", to=dst), send_step], [src],
                     after=max(0.001, start + at - sim.run_s))
             except SimError as err:
                 # This message, not the run: the rest go on at their instants.

@@ -1,5 +1,11 @@
 """Delivery of LXMF messages, from what the senders' drivers reported.
 
+T185's self-check (`routed_sends`, `chain_relayed`) is here too: whether a
+route-carrying send (traffic.py's `routes` option, or a script's own
+`.reticulum.lxmf.send_route()`) was actually carried by the chain it named,
+read from the run's own record, rather than trusting that a chain was
+merely accepted.
+
 A message is delivered when its sender's driver reports it so, the event
 `lxmf.message.status` with `status: delivered` in the run's `events.jsonl`,
 for the id simd gave the `lxmf.send` (sim_mesh.reticulum.driver). `analyse` counts a
@@ -166,3 +172,68 @@ def analyse_run(traffic_path, run_dir):
     forwarders = {view.names[s] for s in view.forwarders()}
     out, rows = analyse(drive, logs, adj, forwarders)
     return drive, out, rows
+
+
+# ---- T185: did a route-carrying send travel the chain it named? ----------
+
+def routed_sends(drive):
+    """Every (send, hop names) of `drive` (traffic.json) whose send carried
+    routes: one entry per route (a send may carry up to ROUTE_ALTS_MAX),
+    hop names found from the run's own `dests` ({name: lxmf.delivery
+    address}, built once at the run's "identities" phase), inverted by a
+    tag's own truncation (`online_map()`'s, the first 8 hex digits) — the
+    same way the sim already learns a station's destination hashes, read
+    backwards. A tag with no station behind it (an address never
+    resolved, or two stations sharing a truncated prefix — unlikely at a
+    sim's scale, never silently assumed) is `None` in its place."""
+    by_tag = collections.defaultdict(list)
+    for name, addr in (drive.get("dests") or {}).items():
+        by_tag[addr[:8]].append(name)
+    out = []
+    for s in drive.get("sends", []):
+        for route in s.get("routes") or ():
+            hops = [names[0] if len(names) == 1 else None for names in
+                   (by_tag.get(tag, []) for tag in route)]
+            out.append((s, hops))
+    return out
+
+
+def chain_relayed(run_dir, drive, window_s=120.0):
+    """T185's self-check: for every route-carrying send, whether each named
+    hop transmitted an ordinary (non-SUPE, non-announce) frame on the air
+    within `window_s` after the send went out — evidence the chain was
+    actually relayed, not merely accepted. {marker: [[(hop name, seen?),
+    ...], ...]}, one inner list per route the send carried (most sends
+    carry one), hops within it in order; a hop of `None` (`routed_sends`,
+    a tag that did not resolve to one station) is never "seen".
+
+    Read from the run's own record (`sim_mesh.record`,
+    `sim_mesh.reticulum.frames.kind_of`) rather than trusted from the send
+    alone: `routed_sends` says WHO should have relayed it; this says
+    whether the ether actually carries their transmission."""
+    import base64
+
+    from sim_mesh import record as record_module
+    from sim_mesh.reticulum import frames as rframes
+    from sim_mesh.view import RunView
+
+    view = RunView(run_dir)
+    tx_at = collections.defaultdict(list)       # station id -> [T seconds, ...] it transmitted at
+    for stamp, _direction, sid, msg in record_module.lines(view.record_path, types=("tx",)):
+        payload = base64.b64decode(msg.get("payload") or "")
+        kind = rframes.kind_of(payload, 0)
+        if kind and not rframes.is_announce_kind(kind) and not kind.startswith("SUPE") \
+                and kind not in ("power request", "path request"):
+            tx_at[sid].append(record_module.parse_time(stamp))
+
+    out = {}
+    for s, hops in routed_sends(drive):
+        t_sent = (s.get("t_sent") or 0) / 1e6
+        seen = []
+        for name in hops:
+            sid = view.ids.get(name) if name else None
+            ok = sid is not None and any(t_sent <= t <= t_sent + window_s
+                                         for t in tx_at.get(sid, ()))
+            seen.append((name, ok))
+        out.setdefault(s["marker"], []).append(seen)
+    return out

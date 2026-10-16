@@ -151,12 +151,14 @@ import builtins
 import datetime
 import functools
 import json
+import math
 import os
 import textwrap
 import threading
 
 from sim_mesh import select as select_module
 from sim_mesh import sim as sim_module
+from sim_mesh.reticulum.driver import CHAIN_HOPS_MAX, ROUTE_ALTS_MAX
 
 SPEEDS = ("real", "max")
 LOGLEVELS = ("output", "commands", "debug")
@@ -274,6 +276,7 @@ class Runtime:
         self.speed = None
         self.firmware_rules = []
         self.first_boot_rules = []
+        self.marks = {}              # label -> {node name, ...}: see Nodes._mark
         self.given = {}             # input values as the runner was given them (--set)
         self.inputs = {}            # the declared inputs' values, once script_input() has run
         self.loglevel = None        # the script's own, over the simulation's
@@ -652,6 +655,18 @@ class _Lxmf(_Layer):
         identity `sender` (none named: the first): {node: the message's id}."""
         return _given(to=str(to), text=str(text), sender=sender)
 
+    @verb("lxmf.send_route")
+    def send_route(self, to, routes, text, sender=None):
+        """An LXMF message to a node or an LXMF identity, along up to 4
+        ordered concrete routes (`routes`: a list of routes, each a list of
+        4-byte hop tags, as `online_map()` gives them — 8 hex digits, the
+        first bytes of the hop's own lxmf.delivery address), from the
+        node's identity `sender` (none named: the first): {node: the
+        message's id}. T185's CMD_LXMF_SEND_ROUTE, like `.lxmf.send()`
+        otherwise; see `build_routes()`."""
+        return _given(to=str(to), routes=[[str(tag) for tag in route] for route in routes],
+                     text=str(text), sender=sender)
+
 
 class _Reticulum(_Layer):
     """Reticulum, on a selection's Reticulum nodes: `.reticulum`."""
@@ -669,6 +684,20 @@ class _Reticulum(_Layer):
         """Each node's path table, [{dest, next_hop, iface, hops}]: to a node or
         LXMF identity, a destination, on an interface, or all of it."""
         return _given(to=to, dest_hash=dest_hash, iface=iface)
+
+    def online(self, on=True):
+        """T185: mark each node "available online" — its position and
+        lxmf.delivery tag readable through `online_map()`, alongside a
+        nodeset `tag="online"` (either is enough; see the module's online
+        map section). Bookkeeping kept for this script's run, nothing said
+        to the station: {node: True}."""
+        return _marked(self.selection, "online", on)
+
+    def user_configured(self, on=True):
+        """T185: mark each node "user-configured" — allowed to read
+        `online_map()`, alongside a nodeset `tag="internet"` or
+        `tag="gateway"`. Bookkeeping only, as `.online()` is."""
+        return _marked(self.selection, "user-configured", on)
 
 
 class _Meshcore(_Layer):
@@ -924,7 +953,132 @@ def node(name):
     return Nodes({"names": [str(name)]})
 
 
+# ---- T185: the online map and the user-path builder -----------------------
+#
+# "Available online": a nodeset tag, or a selection marked `.reticulum.
+# online()` at runtime — either is enough, read together with the
+# selection algebra already there (`nodes(tag=…) | marked(…)`), nothing
+# new. Who may read the map is the same OR, over `tag="internet"` /
+# `tag="gateway"` or `.reticulum.user_configured()`. See `online_map()`.
+
+def _marked(sel, label, on):
+    """`sel`'s nodes marked `label` for this script's run (`.reticulum.
+    online()`, `.reticulum.user_configured()`): bookkeeping kept in
+    `runtime.marks`, nothing said to a station. {node: bool(on)}."""
+    if sel is None:
+        raise ScriptError("not a first-boot rule: a mark is done to a running selection, "
+                          "not what a station is given at boot")
+    names = sel._names()
+    held = runtime.marks.setdefault(label, set())
+    (held.update if on else held.difference_update)(names)
+    return _done(sel, "_mark(%r, %s)" % (label, bool(on)), {n: bool(on) for n in names})
+
+
+def marked(label):
+    """A selection of the nodes marked `label` this script's run (`.reticulum.
+    online()`, `.reticulum.user_configured()`)."""
+    return Nodes({"names": sorted(runtime.marks.get(label, ()))})
+
+
+def online_map(for_station=None, online_tag="online", reader_tags=("internet", "gateway")):
+    """The stationary nodes a station may read: [{name, lat, lon, height_m,
+    tag}, ...], or `None` when `for_station` may not read it.
+
+    **"Available online"**: nodes tagged `online_tag`, or marked
+    `.reticulum.online()`. **Who may read it**: `for_station` is checked
+    against nodes tagged one of `reader_tags`, or marked `.reticulum.
+    user_configured()`; `for_station=None` builds the map without that
+    check (for a coordinator, or a script that trusts every reader).
+
+    Each entry's `tag` is the first 4 bytes (8 hex digits) of the node's
+    lxmf.delivery address, its first identity's — fetched live
+    (`.reticulum.lxmf.identities()`), the sim's own way of learning a
+    station's destination hashes; a node with no identity yet is left out.
+    Feeds `build_routes()`."""
+    every = _sim().facts()
+    online_names = (nodes(tag=online_tag) | marked("online")).pick(every)
+    if for_station is not None:
+        readable = (nodes(tag=list(reader_tags)) | marked("user-configured")).pick(every)
+        if for_station not in readable:
+            return None
+    if not online_names:
+        return []
+    idents = Nodes({"names": online_names}).reticulum.lxmf.identities()
+    out = []
+    for name in online_names:
+        ids = idents.get(name) or []
+        if not ids:
+            continue
+        facts_n = every[name]
+        out.append({"name": name, "lat": facts_n["lat"], "lon": facts_n["lon"],
+                    "height_m": facts_n["height_m"], "tag": ids[0][1][:8]})
+    return out
+
+
+EARTH_RADIUS_M = 6_371_000.0
+
+
+def _metres(a, b):
+    """Great-circle metres between (lat, lon) pairs `a` and `b`."""
+    lat1, lat2 = math.radians(a[0]), math.radians(b[0])
+    dlat, dlon = lat2 - lat1, math.radians(b[1] - a[1])
+    h = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return 2 * EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(h)))
+
+
+def build_routes(sender, dest, online_map, range_m, alternatives=3, max_hops=CHAIN_HOPS_MAX,
+                 max_routes=ROUTE_ALTS_MAX):
+    """Up to `max_routes` concrete routes from `sender` to `dest` (each a
+    (lat, lon) pair), greedy relays hop by hop through `online_map`'s
+    stationary nodes (`online_map()`'s own [{name, lat, lon, tag}, ...]).
+
+    At each hop, among the map's nodes within `range_m` of the hop before
+    it (`sender`, the first time) and not already used on this route,
+    ranked nearest-to-`dest` first: route `k` (0-based) takes the `k`-th
+    ranked one — "the next-best alternative in turn" from one route to the
+    next, not within one, so route 0 is the greediest throughout. A hop
+    already within `range_m` of `dest` ends the route there — the hops are
+    the intermediates alone, never `sender` or `dest`. A hop with no `k`-th
+    alternative, or none nearer `dest` than where it stands, ends the
+    route short rather than loop or backtrack: the engine's own fallback to
+    ordinary routing carries the rest once a stored chain runs out
+    (CMD_LXMF_SEND_ROUTE's doc). `max_routes` is also capped at
+    `alternatives`: a route past the ranked alternatives considered is not
+    one this ranking can tell from another already returned.
+
+    Each route is `[{name, lat, lon, height_m, tag}, ...]`; `route_tags()`
+    gives `.reticulum.lxmf.send_route()` its `routes` argument from them."""
+    max_routes = max(1, min(max_routes, alternatives))
+    routes = []
+    for rank in range(max_routes):
+        hops, pos, used = [], sender, set()
+        for _ in range(max_hops):
+            if _metres(pos, dest) <= range_m:
+                break
+            candidates = sorted(
+                (n for n in online_map if n["name"] not in used
+                 and _metres(pos, (n["lat"], n["lon"])) <= range_m),
+                key=lambda n: _metres((n["lat"], n["lon"]), dest))
+            if rank >= len(candidates):
+                break
+            chosen = candidates[rank]
+            if _metres((chosen["lat"], chosen["lon"]), dest) >= _metres(pos, dest):
+                break
+            hops.append(chosen)
+            used.add(chosen["name"])
+            pos = (chosen["lat"], chosen["lon"])
+        routes.append(hops)
+    return routes
+
+
+def route_tags(routes):
+    """`build_routes()`'s routes, as `.reticulum.lxmf.send_route()` wants
+    its `routes` argument: each hop's `tag` alone."""
+    return [[hop["tag"] for hop in route] for route in routes]
+
+
 __all__ = ["script_input", "script_include", "script_results", "script_loglevel",
            "sim_speed", "sim_nodesets", "sim_now", "sim_wait", "sim_until", "sim_phase",
            "sim_snapshot", "sim_pause", "sim_stop", "sim_script_loglevel",
-           "nodes", "node", "Node", "Firmware", "Run", "ScriptError"]
+           "nodes", "node", "Node", "Firmware", "Run", "ScriptError",
+           "marked", "online_map", "build_routes", "route_tags"]

@@ -46,6 +46,18 @@ announces carry), which a run keeps unique:
                                         digits) from its identity `sender`
                                         (None: the first); `mid` is the
                                         message's id, sim-mesh's
+    lxmf.send_route(station, dest, routes, text, mid, sender=None)
+                                        T185: `lxmf.send`, along up to
+                                        ROUTE_ALTS_MAX ordered concrete
+                                        routes (`routes`: a list of routes,
+                                        each a list of 4-byte hop tags as 8
+                                        hex digits — CMD_LXMF_SEND_ROUTE
+                                        0xC6, reticulum-node's T184 branch).
+                                        Answered and reported exactly as
+                                        `lxmf.send` is; a firmware with no
+                                        way to send one this way raises
+                                        `self.cannot("lxmf.send_route")`,
+                                        the default here.
 
 **What became of a message** is reported against `mid`, from `console_line`
 or however else the driver learns it:
@@ -74,11 +86,108 @@ ID_EVENT = "lxmf.message.id"
 RECEIVED_EVENT = "lxmf.message.received"
 ORPHANS_MAX = 256           # a station's statuses for ids not coupled yet, kept
 
+# ---- T185: CMD_LXMF_SEND_ROUTE's wire frame -----------------------------
+#
+# A firmware driver that can reach its station's door directly (no tool of
+# its own builds this frame yet) uses these: the same KISS byte-stuffing
+# every rncfg invocation already speaks (reticulum-hdlc::encode_frame_raw),
+# and the payload reticulum-rnode-proto::CMD_LXMF_SEND_ROUTE documents
+# (mirrored by reticulum-node's own test, tests/scenarios.rs::
+# send_route_payload): `dest(16) ‖ n_routes(1) ‖ routes ‖ content`, each
+# route `n_hops(1) ‖ tags(n_hops × 4B)`. Kept here, the category's own
+# driver interface, rather than in one firmware's driver, so any reticulum
+# firmware's driver may reuse it rather than re-deriving it.
+FEND, FESC, FEND_T, FESC_T = 0xC0, 0xDB, 0xDC, 0xDD
+CMD_LXMF_SEND_ROUTE = 0xC6
+CHAIN_HOPS_MAX = 8          # reticulum-node::route::CHAIN_HOPS_MAX
+ROUTE_ALTS_MAX = 4          # reticulum-node::ROUTE_ALTS_MAX
+
+
+def kiss_encode(cmd, payload):
+    """One KISS frame: `FEND cmd payload(byte-stuffed) FEND`, `cmd` a whole
+    byte (an RNode opcode, not a TNC command/port nibble pair)."""
+    out = bytearray((FEND, cmd))
+    for b in payload:
+        if b == FEND:
+            out += bytes((FESC, FEND_T))
+        elif b == FESC:
+            out += bytes((FESC, FESC_T))
+        else:
+            out.append(b)
+    out.append(FEND)
+    return bytes(out)
+
+
+def kiss_decode(frame):
+    """(cmd, payload) out of one complete `FEND … FEND` frame, its framing
+    bytes included; None for one too short to hold a command byte. Only
+    `payload` is unescaped: `cmd` is the byte right after the opening
+    FEND, written raw by `kiss_encode` (and by reticulum-hdlc's own
+    `encode_frame_raw`), never run through byte-stuffing itself."""
+    body = frame[1:-1] if frame[:1] == bytes((FEND,)) and frame[-1:] == bytes((FEND,)) \
+        else frame
+    if not body:
+        return None
+    cmd, rest = body[0], body[1:]
+    out = bytearray()
+    esc = False
+    for b in rest:
+        if esc:
+            out.append(FEND if b == FEND_T else FESC if b == FESC_T else b)
+            esc = False
+        elif b == FESC:
+            esc = True
+        else:
+            out.append(b)
+    return cmd, bytes(out)
+
+
+def take_kiss_frame(buf):
+    """The first complete `FEND … FEND` frame in `buf`, decoded, and what is
+    left of `buf` after it: (`None`, `buf`) while none is complete yet.
+    Bytes before a frame opens (there should be none, here) are dropped
+    with it, as a station's own reader tolerates them too."""
+    start = buf.find(bytes((FEND,)))
+    if start < 0:
+        return None, buf
+    end = buf.find(bytes((FEND,)), start + 1)
+    if end < 0:
+        return None, buf[start:]
+    return kiss_decode(bytes(buf[start:end + 1])), buf[end + 1:]
+
+
+def route_send_payload(dest, routes, content):
+    """`CMD_LXMF_SEND_ROUTE`'s payload: `dest(16) ‖ n_routes(1) ‖ routes ‖
+    content`, each route `n_hops(1) ‖ tags(n_hops × 4B)`. `dest` and every
+    tag are raw bytes (16 and 4 of them), `content` raw bytes too.
+    `ValueError` for more routes than [`ROUTE_ALTS_MAX`] or more hops in one
+    than [`CHAIN_HOPS_MAX`], which the engine would refuse anyway
+    (`ERR_BAD_VALUE`) — caught here instead of on the air."""
+    if len(dest) != 16:
+        raise ValueError("a destination hash is 16 bytes, not %d" % len(dest))
+    if len(routes) > ROUTE_ALTS_MAX:
+        raise ValueError("%d routes is more than ROUTE_ALTS_MAX (%d)"
+                         % (len(routes), ROUTE_ALTS_MAX))
+    out = bytearray(dest)
+    out.append(len(routes))
+    for route in routes:
+        if len(route) > CHAIN_HOPS_MAX:
+            raise ValueError("%d hops is more than CHAIN_HOPS_MAX (%d)"
+                             % (len(route), CHAIN_HOPS_MAX))
+        out.append(len(route))
+        for tag in route:
+            if len(tag) != 4:
+                raise ValueError("a hop tag is 4 bytes, not %d" % len(tag))
+            out += bytes(tag)
+    out += bytes(content)
+    return bytes(out)
+
 
 class ReticulumDriver(Driver):
     category = "reticulum"
     VERBS = Driver.VERBS + ("role", "path", "peer_tcp", "current_role",
-                            "lxmf.create", "lxmf.identities", "lxmf.announce", "lxmf.send")
+                            "lxmf.create", "lxmf.identities", "lxmf.announce", "lxmf.send",
+                            "lxmf.send_route")
 
     def __init__(self, firmware):
         super().__init__(firmware)
@@ -108,6 +217,9 @@ class ReticulumDriver(Driver):
 
     async def lxmf_send(self, station, dest, text, mid, sender=None):
         raise self.cannot("lxmf.send")
+
+    async def lxmf_send_route(self, station, dest, routes, text, mid, sender=None):
+        raise self.cannot("lxmf.send_route")
 
     # ---- what became of a message ----------------------------------------
 
