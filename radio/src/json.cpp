@@ -197,6 +197,12 @@ int64_t Object::num(const char* key, int64_t def) const
     return it != fields_.end() && it->second.isNum ? (int64_t)it->second.num : def;
 }
 
+double Object::real(const char* key, double def) const
+{
+    auto it = fields_.find(key);
+    return it != fields_.end() && it->second.isNum ? it->second.num : def;
+}
+
 std::string Object::str(const char* key, const char* def) const
 {
     auto it = fields_.find(key);

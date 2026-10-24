@@ -47,6 +47,13 @@ struct EtherState {
     struct { int sf; int syncWord; bool iqInverted; } side[kMaxSideDetectors];
 };
 
+/** What an instantaneous RSSI reads at the connector, from the power of the
+ *  frames in flight there, in mW: their sum, or the floor when there are none.
+ *  A station's own place (a device beside it, its building) lifts its floor by
+ *  its measured rise, SIM_MESH_BOARD's noise_rise_db (none without), and that
+ *  noise adds to what it hears, as the ether's sense adds it. */
+int airReadingDbm(double framesMw);
+
 /** A frame leaving this radio. */
 struct EtherTxFrame {
     EtherState     state;

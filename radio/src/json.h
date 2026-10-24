@@ -29,6 +29,7 @@ public:
 
     bool        has(const char* key) const;
     int64_t     num(const char* key, int64_t def) const;
+    double      real(const char* key, double def) const;   /**< a number with its fraction */
     std::string str(const char* key, const char* def) const;
 
 private:

@@ -11,7 +11,10 @@ Each test is named for the rule it holds.
 
 import base64
 import ctypes
+import json
 import os
+import subprocess
+import sys
 import time
 
 import pytest
@@ -383,6 +386,33 @@ def test_rssi_inst_reads_the_air_while_receiving(chip):
     assert dbm() == -110
     chip.ether.rx_begin(3, -70, 1000, 2000, 200_000, cad=True)
     chip.until(lambda: dbm() == -70)
+
+
+# A station whose place lifts its floor 11 dB (board A's, beside a USB 3 device, on the bench).
+NOISY_PLACE = json.dumps({"chip": "lr2021", "max_dbm": 22, "noise_rise_db": 11})
+
+
+def test_a_noisy_place_lifts_the_floor_the_lr2021_reads(chip):
+    """SIM_MESH_BOARD's rise, read once per process (so in a child): the floor
+    reads the rise up, and the place's noise adds to a frame's power."""
+    if os.environ.get("SIM_MESH_BOARD") != NOISY_PLACE:
+        env = dict(os.environ, SIM_MESH_BOARD=NOISY_PLACE)
+        done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                               "%s::%s" % (os.path.abspath(__file__),
+                                           "test_a_noisy_place_lifts_the_floor_the_lr2021_reads")],
+                              env=env, capture_output=True, text=True, timeout=60)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return
+
+    def dbm():
+        r = chip.query(RSSI_INST, 4)
+        return -((r[0] << 1) | (r[1] & 1)) / 2
+
+    chip.configure()
+    chip.start_rx()
+    assert dbm() == -99                          # -110 + 11
+    chip.ether.rx_begin(4, -95, 1000, 2000, 200_000, cad=True)
+    chip.until(lambda: dbm() == -94)             # -95 dBm and -99.4 dBm summed
 
 
 def test_cad_finds_a_frame_heard_before_standby(chip):

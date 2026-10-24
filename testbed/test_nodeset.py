@@ -50,6 +50,8 @@ def test_the_documented_example_reads_and_writes_back_unchanged(nodesets_dir):
     assert json.loads(boards.environment(None)) == {"chip": "sx1262", "max_dbm": 22}
     assert json.loads(boards.environment(22)) == {"chip": "sx1262", "max_dbm": 22}
     assert json.loads(boards.environment(14)) == {"chip": "sx1262", "max_dbm": 14}
+    assert json.loads(boards.environment(14, noise_rise_db=11.0))["noise_rise_db"] == 11.0
+    assert "noise_rise_db" not in json.loads(boards.environment(14, noise_rise_db=0.0))
     assert json.loads(boards.environment(23))["fem_part"] == "gc1109"
     assert ns.offset("n017", "gw-alex") == 40
     assert nodeset.dump(ns.data) == SAMPLE
@@ -69,6 +71,9 @@ def test_names_ids_and_heights_are_checked_and_nodes_declare_nothing(tmp_path):
              "has no board.*max_dbm"),
             ("nodes:\n  a: { id: 1, lat: 0, lon: 0, max_dbm: 30 }\n", "max_dbm is -9 to 27"),
             ("nodes:\n  a: { id: 1, lat: 0, lon: 0, max_dbm: loud }\n", "max_dbm is a number"),
+            ("nodes:\n  a: { id: 1, lat: 0, lon: 0, noise_rise_db: loud }\n",
+             "noise_rise_db is a finite number"),
+            ("nodes:\n  a: { id: 1, lat: 0, lon: 0, noise_rise_db: -3 }\n", "0 dB or more"),
             ("nodes:\n  a: { id: 1, lat: 0, lon: 0, antenna: { type: dish } }\n", "no antenna"),
             ("nodes:\n  a: { id: 1, lat: 0, lon: 0, antenna: { gain_dbi: 2 } }\n",
              "antenna has no"),
@@ -505,3 +510,14 @@ def test_a_meshtastic_node_list_imports_from_the_info_text_or_the_json():
         assert data["nodes"]["router-hill"]["tags"] == ["meshtastic", "router"]
     with pytest.raises(store.StoreError, match="no point"):
         nodeset.import_points("meshtastic", json.dumps({"!c3": nodes["!c3"]}))
+
+
+def test_a_measured_noise_rise_is_kept_and_none_is_no_key(tmp_path):
+    """`noise_rise_db`: a node's place over its chip's floor, kept as read;
+    a node that states none has no key, so its record is as it always was."""
+    path = tmp_path / "f.yaml"
+    path.write_text("nodes:\n  a: { id: 1, lat: 0, lon: 0, noise_rise_db: 11 }\n"
+                    "  b: { id: 2, lat: 0, lon: 0.01 }\n")
+    nodes = nodeset.read(str(path))["nodes"]
+    assert nodes["a"]["noise_rise_db"] == 11.0
+    assert "noise_rise_db" not in nodes["b"]
