@@ -942,3 +942,40 @@ def test_cad_frame_draws_are_deterministic(v2):
         air.medium.recv_state(2, air.ADDR, dict({"type": "state", "slot": 0}, **radio("CAD", sf=7)))
         return [m.get("cad") for m in air.told(2, "rx_begin")]
     assert once() == once()
+
+
+def test_a_noise_rise_lifts_only_its_own_stations_floor(v2):
+    """`set_noise_rises`: a station's place (a device beside it, its building)
+    lifts its own floor by its measured rise, on top of its chip's figure, and
+    no other station's (T276: a receiver beside a USB 3 hub read 11 dB up on
+    the bench while its neighbours did not)."""
+    medium = v2
+    medium.set_chips({1: "sx1262", 2: "sx1262"})
+    medium.set_noise_rises({2: 11.0})
+    assert medium.noise(125_000, 2) == pytest.approx(medium.noise(125_000, 1) + 11.0)
+    assert medium.noise(125_000, 1) == medium.noise(125_000)
+    assert medium.noise(125_000) == medium.noise(125_000, None)       # no receiver: no place
+
+
+def test_reach_reads_the_receivers_own_floor(v2):
+    """`audible` with a receiver: a level that clears a quiet station's floor
+    may not clear a noisy one's, the one-way link of a receiver beside its own
+    noise source."""
+    medium = v2
+    medium.set_noise_rises({2: 11.0})
+    edge = medium.noise(125_000, 1) + medium.sensitivity(7) + 1.0
+    assert medium.audible(edge, 125_000, 7, 1)
+    assert not medium.audible(edge, 125_000, 7, 2)
+    assert medium.audible(edge, 125_000, 7)                           # the map's view: no place
+
+
+def test_a_noise_rise_is_part_of_what_its_station_senses(v2):
+    """Energy sense sums what is on the air plus the station's own place's
+    noise (its rise's excess power over its chip's floor); a station without a
+    rise senses exactly what it did before, nothing on an empty channel."""
+    medium = v2
+    medium.set_noise_rises({2: 11.0})
+    state = {"freq": 869_525_000, "bw": 125_000}
+    assert medium.in_band_energy(1, state, 0) == -math.inf
+    rise_mw = ether_module.dbm_to_mw(medium.noise(125_000, 2)) - ether_module.dbm_to_mw(medium.noise(125_000, 2) - 11.0)
+    assert medium.in_band_energy(2, state, 0) == pytest.approx(ether_module.mw_to_dbm(rise_mw))

@@ -1178,6 +1178,7 @@ class Ether(asyncio.DatagramProtocol):
         self.tables = {}            # band name -> slt.Table
         self.names = {}             # sid -> node name, the table's index
         self.chips = {}             # sid -> its radio's chip (`set_chips`), for physics v2
+        self.noise_rises = {}       # sid -> its place's noise over its chip's floor, dB (`set_noise_rises`)
         self.gains = {}             # sid -> antenna gain in dBi
         self.frames = []            # frames still in flight or just ended
         self.knots = {}             # (name, name, k) -> a fading knot (`fade_db`)
@@ -1772,6 +1773,9 @@ class Ether(asyncio.DatagramProtocol):
         figure = self.physics.noise_figure_db
         if rsid is not None and self.physics.v2:
             figure += self.physics.noise_figure_offset_db(self.chip_of(rsid))
+        if rsid is not None:
+            # The station's own place: what its environment adds (`set_noise_rises`).
+            figure += self.noise_rises.get(rsid, 0.0)
         return (THERMAL_DBM_PER_HZ + 10.0 * math.log10(max(float(bw_hz or 125_000), 1.0))
                 + figure)
 
@@ -1780,12 +1784,13 @@ class Ether(asyncio.DatagramProtocol):
         reference frame arrives all but ANCHOR_PER of the time."""
         return SENSITIVITY_DB.get(sf, SLOWEST_SENSITIVITY_DB)
 
-    def audible(self, level, bw_hz, sf=None):
+    def audible(self, level, bw_hz, sf=None, rsid=None):
         """True when a frame at this level, unfaded, clears its modem's
-        datasheet threshold over noise: reachable, as the map shows it."""
+        datasheet threshold over noise: reachable, as the map shows it. Over
+        the receiver's own floor when `rsid` names it."""
         if level is None:
             return False
-        return level >= self.noise(bw_hz) + self.sensitivity(sf)
+        return level >= self.noise(bw_hz, rsid) + self.sensitivity(sf)
 
     def symbol_error_at(self, frame, level, sf=None, rsid=None):
         """The chance one symbol of `frame` is demodulated wrong at `level`:
@@ -2258,6 +2263,9 @@ class Ether(asyncio.DatagramProtocol):
             level = self.level_at(other, rsid, now)
             if level is not None:
                 total += dbm_to_mw(level)
+        # A station's own place adds its noise to what it senses. The chip's thermal floor stays out, as
+        # before (the threshold is set against signal energy), so a station without a rise senses as it did.
+        total += self.noise_rise_mw(state.get("bw"), rsid)
         return mw_to_dbm(total)
 
     def arrive(self, frame, msg, rstation, slot, level, now=None):
@@ -2508,6 +2516,22 @@ class Ether(asyncio.DatagramProtocol):
         if self.physics.v2:
             return sf_a == sf_b
         return same_class(sf_a, sf_b)
+
+    def set_noise_rises(self, rises_by_sid):
+        """How far each station's own noise floor stands above its chip's, in dB, sid -> rise: its place,
+        not its radio (a receiver beside a USB 3 device read 11 dB up on the bench, 2026-10-24). Measured,
+        from the nodeset (`noise_rise_db`); a station not named has none. Like `set_chips`, never over the
+        wire, so a record with every rise at 0 is the same as one without."""
+        self.noise_rises = {int(sid): float(db) for sid, db in (rises_by_sid or {}).items()}
+
+    def noise_rise_mw(self, bw_hz, rsid):
+        """The power a station's rise adds to its floor, in milliwatts: what it hears of its own place's noise
+        beyond its chip's thermal floor. 0 for a station without a rise."""
+        rise = self.noise_rises.get(rsid, 0.0) if rsid is not None else 0.0
+        if not rise:
+            return 0.0
+        base = self.noise(bw_hz, rsid) - rise
+        return dbm_to_mw(base + rise) - dbm_to_mw(base)
 
     def set_chips(self, chips_by_sid):
         """Which chip each station's radio is, sid -> "sx1262" or "lr2021",

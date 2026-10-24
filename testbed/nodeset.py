@@ -119,9 +119,11 @@ def blank():
 
 
 def node_record(node_id, lat, lon, height_m=DEFAULT_HEIGHT_M, height_from="assumed",
-                antenna=None, tags=(), max_dbm=None):
-    """One node, in the shape the file and every caller use: `max_dbm` is
-    there only when the node states one."""
+                antenna=None, tags=(), max_dbm=None, noise_rise_db=None):
+    """One node, in the shape the file and every caller use: `max_dbm` and
+    `noise_rise_db` are there only when the node states them. `noise_rise_db`
+    is how far the node's place lifts its receiver's noise floor over its
+    chip's own (a device beside it, its building): measured, never below 0."""
     out = {"id": int(node_id), "lat": float(lat), "lon": float(lon),
            "height_m": float(height_m), "height_from": str(height_from),
            "antenna": antennas_module.check(antenna, "a node"),
@@ -129,6 +131,12 @@ def node_record(node_id, lat, lon, height_m=DEFAULT_HEIGHT_M, height_from="assum
     max_dbm = boards_module.check(max_dbm, "a node")
     if max_dbm is not None:
         out["max_dbm"] = max_dbm
+    if noise_rise_db is not None:
+        rise = float(noise_rise_db)
+        if not math.isfinite(rise) or rise < 0:
+            raise store.StoreError("a node's noise_rise_db is a finite rise in dB, 0 or more, not %r"
+                                   % (noise_rise_db,))
+        out["noise_rise_db"] = rise
     return out
 
 
@@ -213,7 +221,7 @@ def parse(data, where):
             node_id, finite(lat, "lat", here), finite(lon, "lon", here),
             finite(node.get("height_m", DEFAULT_HEIGHT_M), "height_m", here), height_from,
             antennas_module.check(node.get("antenna"), here), check_tags(node.get("tags")),
-            boards_module.check(node.get("max_dbm"), here))
+            boards_module.check(node.get("max_dbm"), here), node.get("noise_rise_db"))
     offsets = data.get("offsets") or []
     if not isinstance(offsets, list):
         raise store.StoreError("%s: offsets is a list, each { between: [a, b], db, note? }"
