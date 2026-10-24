@@ -17,7 +17,10 @@
 A node is its position, its antenna's height above the ground under it and
 where that figure came from (`measured`, `roof`, `raster`, `assumed`), its
 maximum power (`max_dbm`, dBm at the antenna connector, 22 when absent and
-at most 27; above 22 the node has a front end, boards.py), its antenna
+at most 27; above 22 the node has a front end, boards.py), how far its
+place lifts its receiver's noise floor over its chip's own (`noise_rise_db`,
+measured, 0 dB or more; none when absent: a device beside it, its
+building), its antenna
 (antennas.py: a type of the catalogue, and a directional one's aim), and its
 tags. A node has no board: every node is the one board boards.py
 describes. Nothing in it is said to a station: scripts say everything, in
@@ -336,6 +339,8 @@ def dump_node(name, node):
              "height_from: %s" % node["height_from"]]
     if node.get("max_dbm") is not None:
         parts.append("max_dbm: %s" % store.scalar(node["max_dbm"]))
+    if node.get("noise_rise_db") is not None:
+        parts.append("noise_rise_db: %s" % store.scalar(node["noise_rise_db"]))
     parts.append("antenna: %s" % dump_antenna(node["antenna"]))
     parts.append("tags: %s" % store.flow(node["tags"]))
     return "  %s: { %s }" % (store.name_scalar(name), ", ".join(parts))

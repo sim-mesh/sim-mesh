@@ -521,3 +521,8 @@ def test_a_measured_noise_rise_is_kept_and_none_is_no_key(tmp_path):
     nodes = nodeset.read(str(path))["nodes"]
     assert nodes["a"]["noise_rise_db"] == 11.0
     assert "noise_rise_db" not in nodes["b"]
+    # Written back, as a run's own copy is (runs.py), and read again: still there.
+    again = tmp_path / "again.yaml"
+    nodeset.write(str(again), nodeset.read(str(path)))
+    assert nodeset.read(str(again))["nodes"]["a"]["noise_rise_db"] == 11.0
+    assert "noise_rise_db" not in nodeset.read(str(again))["nodes"]["b"]
