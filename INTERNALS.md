@@ -1546,7 +1546,7 @@ hundreds of pulses a minute and a drag at 60 Hz are all much cheaper drawn
 than laid out, and none of them wants to be an element. It is drawn in the
 geodata's own metres — a pack's UTM (Universal Transverse Mercator) zone, the
 same transverse Mercator the nodes' positions are projected with for the
-planner, or synthetic ground's nautical mile to the minute from 0°, 0°, as
+planner, or synthetic ground's metres (111,320 m to the degree) from 0°, 0°, as
 `geodata.py` projects it — so a pixel and a metre agree by construction
 rather than by two implementations staying in step.
 

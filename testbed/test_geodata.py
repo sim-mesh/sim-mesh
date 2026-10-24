@@ -90,19 +90,29 @@ def test_a_pack_without_its_pack_is_refused(tmp_path, monkeypatch):
         geodata.load("gone")
 
 
-def test_synthetic_ground_is_a_nautical_mile_to_the_minute_at_zero(tmp_path, monkeypatch):
+def test_synthetic_ground_is_the_equators_degree_in_metres_at_zero(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "GEODATA_DIR", str(tmp_path))
     geodata.write(geodata.geodata_path("flat"),
                   {"synthetic": {"exponent": 3.5, "extent_m": 10000}})
     gd = geodata.load("flat")
     assert not gd.is_pack and gd.exponent == 3.5 and gd.terrain == "flat"
-    assert gd.to_xy(1 / 60, 2 / 60) == pytest.approx((2 * 1852.0, 1852.0))
+    assert gd.to_xy(1 / 60, 2 / 60) == pytest.approx((2 * 111320.0 / 60, 111320.0 / 60))
     assert gd.to_latlon(*gd.to_xy(0.01, -0.02)) == pytest.approx((0.01, -0.02))
-    half = 5000 / 1852.0 / 60
+    half = 5000 / 111320.0
     assert gd.bbox == pytest.approx([-half, -half, half, half])
     assert gd.origin == pytest.approx((0, 0))
     assert gd.holds(0.04, -0.04) and not gd.holds(0.05, 0)
     assert geodata.read(geodata.geodata_path("flat")).data == gd.data
+
+
+def test_synthetic_grounds_hash_holds_its_scale(tmp_path, monkeypatch):
+    """A synthetic table computed at another scale of metres per degree is
+    never reused: the scale is in synthetic ground's content hash."""
+    monkeypatch.setattr(store, "GEODATA_DIR", str(tmp_path))
+    geodata.write(geodata.geodata_path("flat"), {"synthetic": {"exponent": 2.7, "extent_m": 10000}})
+    before = geodata.load("flat").content_hash
+    monkeypatch.setattr(geodata, "M_PER_DEGREE", geodata.M_PER_DEGREE + 1.0)
+    assert geodata.load("flat").content_hash != before
 
 
 def test_a_geodata_file_must_say_what_it_is(tmp_path):
@@ -320,8 +330,11 @@ ROUGH = PLAIN + "shadowing_db: 6.5\nshadowing_seed: 3\n"
 
 def hash_before_the_keys(gd):
     """The content hash as it was before a geodata could say more than its
-    ground: what every table cached until then is keyed by."""
-    text = json.dumps([gd.data, gd.pack_manifest_hash], sort_keys=True)
+    ground: what every table cached until then is keyed by. A pack's is
+    unchanged since; synthetic ground's holds its metres per degree, so its
+    tables from the nautical-mile scale were recomputed once."""
+    placed = gd.pack_manifest_hash if gd.is_pack else geodata.M_PER_DEGREE
+    text = json.dumps([gd.data, placed], sort_keys=True)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 

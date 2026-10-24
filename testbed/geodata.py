@@ -24,9 +24,10 @@ on every geodata whose extent holds one of its nodes. Noise figure and the
 interference figures belong to the medium, not the ground, and are simd's.
 
 **Synthetic ground lies at 0°, 0°**, and its degrees are metres by one fixed
-rule on both axes, a nautical mile to the minute of arc:
+rule on both axes, the equator's degree in metres (WGS84's 2π · 6,378,137 m
+over 360, to the nearest 10 m; `M_PER_DEGREE`):
 
-    x = lon · 60 · 1852 m          y = lat · 60 · 1852 m
+    x = lon · 111,320 m          y = lat · 111,320 m
 
 So a position is still latitude and longitude, the page can show it as
 either, and a nodeset made on one synthetic ground stands on any other.
@@ -102,7 +103,7 @@ MANIFEST = "manifest.json"
 TERRAINS = ("flat",)
 DEFAULT_EXPONENT = 2.7
 DEFAULT_EXTENT_M = 20000.0
-M_PER_DEGREE = 60 * 1852.0          # a nautical mile to the minute, on both axes
+M_PER_DEGREE = 111320.0             # the equator's degree, in metres, on both axes (crs.py's too)
 SIM_MESH_ROOT = os.path.dirname(store.SIM_DIR)
 PLANNER_DIR = os.path.join(SIM_MESH_ROOT, "planner")
 GEODATA_FILE = "geodata.yaml"       # in a geodata's directory
@@ -230,7 +231,7 @@ class TransverseMercator:
 # ---- synthetic ground ----------------------------------------------------
 
 def synthetic_xy(lat, lon):
-    """Degrees to metres on synthetic ground: a nautical mile to the minute."""
+    """Degrees to metres on synthetic ground: the equator's degree on both axes."""
     return lon * M_PER_DEGREE, lat * M_PER_DEGREE
 
 
@@ -299,12 +300,15 @@ class Geodata:
     @property
     def content_hash(self):
         """What a loss table on this ground depends on, hashed: the geodata
-        file's content, and for a pack its manifest. A cached table or
-        coverage raster is good while this is unchanged. The layer keys
-        (the shadowing) are left out: they are put on a table, never
-        computed into it, and without them the hash is what it always was."""
+        file's content, and for a pack its manifest; for synthetic ground the
+        metres per degree that place its nodes, so a table computed at another
+        scale is never reused. A cached table or coverage raster is good while
+        this is unchanged. The layer keys (the shadowing) are left out: they
+        are put on a table, never computed into it, and without them the hash
+        is what it always was."""
         data = {key: value for key, value in self.data.items() if key not in LAYER_KEYS}
-        text = json.dumps([data, self.pack_manifest_hash], sort_keys=True)
+        placed = self.pack_manifest_hash if self.is_pack else M_PER_DEGREE
+        text = json.dumps([data, placed], sort_keys=True)
         return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
     @property
@@ -360,7 +364,7 @@ class Geodata:
 
     def to_xy(self, lat, lon):
         """Degrees to the ground's metres: a pack's easting and northing, or
-        synthetic ground's nautical-mile metres."""
+        synthetic ground's metres (`M_PER_DEGREE`)."""
         if self.is_pack:
             return self.tm.forward(lat, lon)
         return synthetic_xy(lat, lon)

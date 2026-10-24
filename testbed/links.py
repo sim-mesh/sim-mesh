@@ -34,7 +34,7 @@ else the one station that received it cleanly; a frame with neither is left
 out of the distance table.
 
 Positions are the run's nodeset as it ended, in the geodata's metres
-(synthetic ground's nautical-mile metres, a pack's easting and northing);
+(synthetic ground's metres, a pack's easting and northing);
 distances are metres on that plane.
 """
 import argparse

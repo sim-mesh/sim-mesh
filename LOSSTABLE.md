@@ -94,8 +94,8 @@ A JSON object. Readers ignore keys they do not know.
 
 A node's `name` is unique in the table and is how a reader finds its row
 and column; `id` is its station id, `lat` and `lon` its position in degrees
-(WGS84 on ground data; on synthetic ground, degrees at a nautical mile to the
-minute of arc on both axes), `height_m` its antenna's height above the ground
+(WGS84 on ground data; on synthetic ground, degrees at 111,320 m each on both
+axes), `height_m` its antenna's height above the ground
 in metres, and `height_from` where that figure came from: `measured`, `roof`,
 `raster` or `assumed`. Since a reader finds a node by its name, the name is
 part of `nodeset_geometry`: a renamed node is one the table does not have.

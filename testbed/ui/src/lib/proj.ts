@@ -10,7 +10,7 @@
  * good to well under a millimetre inside a zone.
  *
  * Synthetic ground has no CRS: it lies at 0°, 0° and its degrees are metres
- * by one fixed rule on both axes, a nautical mile to the minute of arc, as
+ * by one fixed rule on both axes, the equator's degree in metres, as
  * geodata.py has it, so a pixel on the map and a metre in the medium agree
  * by construction. */
 
@@ -22,10 +22,10 @@ export interface Frame {
 }
 
 const RAD = Math.PI / 180
-/** Metres to a degree on synthetic ground: 60 nautical miles. */
-export const M_PER_DEGREE = 60 * 1852
+/** Metres to a degree on synthetic ground: the equator's (geodata.py's M_PER_DEGREE). */
+export const M_PER_DEGREE = 111320
 
-/** Synthetic ground's frame: a nautical mile to the minute, from 0°, 0°. */
+/** Synthetic ground's frame: its metres from 0°, 0°. */
 export const syntheticFrame: Frame = {
   epsg: null,
   toXY: (lat, lon) => [lon * M_PER_DEGREE, lat * M_PER_DEGREE],
