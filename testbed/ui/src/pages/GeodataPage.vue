@@ -32,7 +32,7 @@
         The ground nodes stand on: a pack (terrain, clutter, buildings, roads,
         places, with ITU-R P.1812 over the real profile), downloaded pre-built,
         built here from public sources, or synthetic ground at 0°, 0° whose degrees
-        are metres at a nautical mile to the minute. Open one to work on it: the
+        are metres, 111,320 m to the degree. Open one to work on it: the
         Nodes tab shows the nodesets with a node on it (counted here), and nothing
         before one is chosen.
       </div>

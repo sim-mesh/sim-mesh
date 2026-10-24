@@ -44,9 +44,10 @@ def stores(tmp_path, monkeypatch):
 
 
 def reference_loss(f_hz, exponent, a, b):
-    """The log-distance formula on synthetic ground, spelled out here independently."""
-    ax, ay = a[1] * 111120, a[0] * 111120
-    bx, by = b[1] * 111120, b[0] * 111120
+    """The log-distance formula on synthetic ground, spelled out here independently
+    (111,320 m to the degree, the equator's)."""
+    ax, ay = a[1] * 111320, a[0] * 111320
+    bx, by = b[1] * 111320, b[0] * 111320
     d = max(1.0, math.hypot(ax - bx, ay - by))
     return 20 * math.log10(4 * math.pi * f_hz / 299_792_458.0) + 10 * exponent * math.log10(d)
 

@@ -23,7 +23,7 @@ checked across, at any density, by anyone:
   crowds and one bridge is the dumbbell a lone relay is tested on.
 
 Positions are metres around `center`, by default (0, 0), synthetic ground's
-own origin, where a degree is sixty nautical miles on both axes
+own origin, where a degree is 111,320 m on both axes
 (`geodata.synthetic_latlon`), so the metres are exact there. On a pack,
 give the centre in degrees: a degree of longitude is then scaled by its
 latitude's cosine, which is close enough for placing nodes.

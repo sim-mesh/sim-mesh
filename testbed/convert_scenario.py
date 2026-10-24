@@ -24,8 +24,8 @@ How each part goes over, and why:
   a station on a plane in metres, equirectangular about the file's `origin`
   (`project` in its ether), and priced every pair by its distance there. The
   same projection is taken here, the points are centred on their centroid,
-  and each is written at synthetic ground's degrees (a nautical mile to the
-  minute on both axes), so every pair stands exactly as far apart as the old
+  and each is written at synthetic ground's degrees (111,320 m each on both
+  axes), so every pair stands exactly as far apart as the old
   runs had it. `check_distances` holds every pair to that within
   CHECK_TOLERANCE_M, and also measures how far the old plane was from the
   great circle: the equirectangular error, about tan(latitude) times a node's

@@ -46,7 +46,7 @@
 
 <script setup lang="ts">
 /* The map: one canvas, drawn in the geodata's own metres (a pack's CRS, or
- * synthetic ground's nautical-mile metres around 0°, 0°), in layers from the
+ * synthetic ground's metres around 0°, 0°), in layers from the
  * ground up:
  *
  *   base       a pack's ground, the server's bake of terrain or clutter

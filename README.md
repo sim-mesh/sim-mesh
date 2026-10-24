@@ -380,8 +380,9 @@ pack: .
 ```
 
 **Synthetic ground** lies at 0°, 0°, and its degrees are metres by one fixed
-rule on both axes, a nautical mile to the minute of arc: `x = lon · 60 · 1852
-m`, `y = lat · 60 · 1852 m`. So a node's position is still latitude and
+rule on both axes, the equator's degree in metres: `x = lon · 111,320 m`,
+`y = lat · 111,320 m` (WGS84's 2π · 6,378,137 m over 360, to the nearest 10 m).
+So a node's position is still latitude and
 longitude, the map shows either, and a nodeset made on one synthetic ground
 stands on any other. A pair's loss on flat terrain is log-distance,
 `FSPL(1 m, f) + 10·n·log10(d)` (FSPL: free-space path loss); `n` is 2 for free

@@ -49,7 +49,6 @@ FIXED = {
     7415: RD_NEW,
 }
 GEOGRAPHIC = (4326, 4269)
-M_PER_DEGREE = 111320.0             # a degree of latitude, near enough for a margin or a pixel
 
 
 def epsg(crs):
@@ -67,7 +66,7 @@ def geographic(crs):
 
 
 def per_metre(crs):
-    return 1.0 / M_PER_DEGREE if geographic(crs) else 1.0
+    return 1.0 / geodata.M_PER_DEGREE if geographic(crs) else 1.0     # near enough for a margin or a pixel
 
 
 def _utm(code):

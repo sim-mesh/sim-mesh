@@ -8,7 +8,7 @@ resolved, and the loss tables the ether read.
 - **Names.** The record knows stations by id; the nodeset maps id to node
   name (`names`) and back (`ids`).
 - **Positions** are the geodata's metres (`geodata.to_xy`): synthetic
-  ground's nautical-mile metres, or a pack's easting and northing. A pack's
+  ground's metres, or a pack's easting and northing. A pack's
   copy points at its pack, which has to be where it points.
 - **Radio, role.** A node's radio is the run's `globals.py` at the node's
   maximum power, unless it is tagged `no-radio`; its role is its role tag,
