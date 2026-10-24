@@ -132,10 +132,10 @@ def node_record(node_id, lat, lon, height_m=DEFAULT_HEIGHT_M, height_from="assum
     if max_dbm is not None:
         out["max_dbm"] = max_dbm
     if noise_rise_db is not None:
-        rise = float(noise_rise_db)
-        if not math.isfinite(rise) or rise < 0:
-            raise store.StoreError("a node's noise_rise_db is a finite rise in dB, 0 or more, not %r"
-                                   % (noise_rise_db,))
+        rise = finite(noise_rise_db, "noise_rise_db", "a node")
+        if rise < 0:
+            raise store.StoreError("a node: noise_rise_db is a rise over its chip's floor, 0 dB "
+                                   "or more, not %r" % (noise_rise_db,))
         out["noise_rise_db"] = rise
     return out
 

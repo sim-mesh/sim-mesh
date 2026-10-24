@@ -1773,9 +1773,8 @@ class Ether(asyncio.DatagramProtocol):
         figure = self.physics.noise_figure_db
         if rsid is not None and self.physics.v2:
             figure += self.physics.noise_figure_offset_db(self.chip_of(rsid))
-        if rsid is not None:
-            # The station's own place: what its environment adds (`set_noise_rises`).
-            figure += self.noise_rises.get(rsid, 0.0)
+        # The station's own place: what its environment adds (`set_noise_rises`); none for no receiver.
+        figure += self.noise_rises.get(rsid, 0.0)
         return (THERMAL_DBM_PER_HZ + 10.0 * math.log10(max(float(bw_hz or 125_000), 1.0))
                 + figure)
 
@@ -1955,7 +1954,7 @@ class Ether(asyncio.DatagramProtocol):
             if other == sid:
                 continue
             level = self.level(sid, other, freq_hz, power_dbm)
-            if self.audible(level, bw_hz, sf):
+            if self.audible(level, bw_hz, sf, other):
                 heard[other] = level
         return heard
 
@@ -2527,7 +2526,7 @@ class Ether(asyncio.DatagramProtocol):
     def noise_rise_mw(self, bw_hz, rsid):
         """The power a station's rise adds to its floor, in milliwatts: what it hears of its own place's noise
         beyond its chip's thermal floor. 0 for a station without a rise."""
-        rise = self.noise_rises.get(rsid, 0.0) if rsid is not None else 0.0
+        rise = self.noise_rises.get(rsid, 0.0)
         if not rise:
             return 0.0
         base = self.noise(bw_hz, rsid) - rise
@@ -2743,7 +2742,7 @@ class Ether(asyncio.DatagramProtocol):
                 continue
             mid = (max(frame.start_us, other.start_us) + min(frame.end_us, other.end_us)) / 2.0
             against = self.level_at(other, rsid, mid)
-            if not self.audible(against, other.bw, other.sf):
+            if not self.audible(against, other.bw, other.sf, rsid):
                 continue        # this receiver never heard the other frame
             if self.level_at(frame, rsid, mid) - against < PAIRWISE_CAPTURE_DB:
                 return "crc", "interference"
@@ -2753,7 +2752,7 @@ class Ether(asyncio.DatagramProtocol):
         """An rx_end for one slot, at the ether's instant now."""
         frame = reception.frame
         snr = (self.end_snr_db(frame, reception.rsid, level) if self.physics.v2
-               else level - self.noise(frame.bw))
+               else level - self.noise(frame.bw, reception.rsid))
         end = {"type": "rx_end", "slot": reception.slot, "id": frame.eid,
                "t": self.now(), "verdict": verdict,
                "payload": frame.payload, "rssi": round(level),

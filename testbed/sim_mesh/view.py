@@ -156,6 +156,9 @@ class RunView:
                       for band in self.run.bands()}
             e.set_losses(losses_module.medium_tables(tables, self.geodata(), self.nodeset,
                                                      self.run.meta.get("grounds")), self.ids)
+            e.set_chips({})     # the run records no chips: every receiver reads the default chip's floor
+            e.set_noise_rises({int(n["id"]): n["noise_rise_db"] for n in self.nodes.values()
+                               if "noise_rise_db" in n})
             self._medium = e
         return self._medium
 
@@ -168,7 +171,7 @@ class RunView:
         r = self.radio(self.names[a])
         e = self.medium()
         level = e.level(a, b, freq_hz or r["freq_hz"], r["power_dbm"])
-        return e.audible(level, r["bw_hz"], r["sf"])
+        return e.audible(level, r["bw_hz"], r["sf"], b)
 
     def radio_graph(self, freq_hz=None):
         """Station id -> the ids that decode it, per `audible`; a node

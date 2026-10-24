@@ -763,7 +763,7 @@ int airLevelDbm(const ChipState& d, int64_t now)
     double mw = 0.0;
     for (const AirFrame& a : d.air)
         if (a.endUs > now) mw += std::pow(10.0, a.levelDbm / 10.0);
-    return mw > 0.0 ? (int)std::lround(10.0 * std::log10(mw)) : kNoiseFloorDbm;
+    return airReadingDbm(mw);
 }
 
 void txDoneCb(void* arg);

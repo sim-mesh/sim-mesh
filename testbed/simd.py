@@ -683,7 +683,8 @@ class Simd:
         station.watchers = len(self.consoles.get(name, ()))
         station.board = boards_module.environment(
             node.get("max_dbm"), self.args.busy_us, self.args.busy_tcxo, self.args.host_us,
-            ether_module.cad_false_busy_spec(self.physics_tables.get("chips")))
+            ether_module.cad_false_busy_spec(self.physics_tables.get("chips")),
+            node.get("noise_rise_db"))
         station.clock_profile = self.clock_profile(name)
         station.short_waits = self.args.short_waits
         # Which chip its radio is (the firmware's node.yaml), told to the ether

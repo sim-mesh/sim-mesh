@@ -19,7 +19,9 @@
 #include "simradio.h"
 
 #include <atomic>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <sys/socket.h>
@@ -329,4 +331,24 @@ extern "C" int simradio_station_open(int sid, const char* bind_addr, const char*
                      kJoinWaitMs);
     }
     return 0;
+}
+
+/* The station's place, from SIM_MESH_BOARD once per process (as the front end's figures are read). */
+static double placeRiseDb()
+{
+    static const double rise = [] {
+        const char* env = getenv("SIM_MESH_BOARD");
+        simradio_json::Object board;
+        return env && board.parse(env, strlen(env)) ? board.real("noise_rise_db", 0.0) : 0.0;
+    }();
+    return rise;
+}
+
+int airReadingDbm(double framesMw)
+{
+    const double rise = placeRiseDb();
+    if (framesMw <= 0.0)
+        return (int)std::lround(kNoiseFloorDbm + rise);
+    framesMw += std::pow(10.0, (kNoiseFloorDbm + rise) / 10.0) - std::pow(10.0, kNoiseFloorDbm / 10.0);
+    return (int)std::lround(10.0 * std::log10(framesMw));
 }

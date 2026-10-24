@@ -2565,3 +2565,33 @@ def test_what_stations_printed_is_read_before_t_moves():
         assert ether.now() == 3_000_000
 
     in_process(test)
+
+
+def test_a_noise_rise_comes_off_the_snr_its_station_is_told(medium):
+    """The SNR a station is told is over its own floor, under physics v1 as
+    under v2: its place's rise comes off it (T276). A neighbour at the same
+    level without a rise is told what it always was."""
+    air = Air(medium, {(1, 2): NEAR_DB, (1, 3): NEAR_DB})
+    medium.set_noise_rises({3: 11.0})
+    t0 = medium.clock.t
+    air.tx(1, b"near")
+    air.run_to(t0 + FRAME_US + 1)
+    quiet, = air.told(2, "rx_end")
+    noisy, = air.told(3, "rx_end")
+    level = level_for(NEAR_DB)
+    assert (quiet["verdict"], noisy["verdict"]) == ("clean", "clean")
+    assert quiet["snr"] == expected_snr(level)
+    assert noisy["snr"] == round(level - NOISE_DBM - 11.0)
+
+
+def test_who_hears_a_station_reads_each_receivers_own_floor(medium):
+    """`levels`: the stations that would decode one, each over its own floor.
+    A receiver beside its own noise drops out where its neighbour at the same
+    level stays: a one-way link (T276)."""
+    level = NOISE_DBM + medium.sensitivity(SF) + 5.0
+    loss = POWER_DBM - level - 20.0 * math.log10(FREQ / 868_000_000)
+    Air(medium, {(1, 2): loss, (1, 3): loss})
+    medium.set_noise_rises({3: 11.0})
+    heard = medium.levels(1, FREQ, BW, POWER_DBM, SF)
+    assert 2 in heard and 3 not in heard
+    assert heard[2] == pytest.approx(level)

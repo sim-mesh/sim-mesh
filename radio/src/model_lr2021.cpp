@@ -549,7 +549,7 @@ int airLevelDbm(const LrState& d, int64_t now)
     double mw = 0.0;
     for (const LrAirFrame& a : d.air)
         if (a.endUs > now) mw += std::pow(10.0, a.levelDbm / 10.0);
-    return mw > 0.0 ? (int)std::lround(10.0 * std::log10(mw)) : kNoiseFloorDbm;
+    return airReadingDbm(mw);
 }
 
 /* A level in the chip's half-dB magnitude below 0 dBm. */

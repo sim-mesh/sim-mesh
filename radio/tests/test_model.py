@@ -856,6 +856,38 @@ def test_a_front_end_shapes_what_goes_out_and_what_the_chip_reads(chip):
     assert done.returncode == 0, done.stdout + done.stderr
 
 
+# A station whose place lifts its floor 11 dB (board A's, beside a USB 3 device, on the bench).
+NOISY_PLACE = json.dumps({"chip": "sx1262", "max_dbm": 22, "noise_rise_db": 11})
+
+
+def noisy_place_case(chip):
+    """Run in a child told its place's rise (the model reads SIM_MESH_BOARD
+    once per process): the floor reads the rise up, and the place's noise adds
+    to a frame's power, as the ether's sense adds it."""
+    chip.write(SET_RX, 0xFF, 0xFF, 0xFF)
+    settle()
+    assert chip.read(GET_RSSI_INST, 1)[0] == 198            # -2 x (-110 + 11)
+    chip.ether.rx_begin(502, -95, 10_000, 20_000, 150_000)
+    settle(0.03)
+    assert chip.read(GET_RSSI_INST, 1)[0] == 188            # -2 x -94: -95 dBm and -99.4 dBm summed
+    chip.ether.rx_end(502, b"beside the hub", rssi=-95, snr=3)
+    chip.wait_irq(RX_DONE)
+    settle(0.2)
+    assert chip.read(GET_RSSI_INST, 1)[0] == 198            # the frame has left: the floor
+
+
+def test_a_noisy_place_lifts_the_floor_the_chip_reads(chip):
+    if os.environ.get("SIM_MESH_BOARD") == NOISY_PLACE:
+        noisy_place_case(chip)
+        return
+    env = dict(os.environ, SIM_MESH_BOARD=NOISY_PLACE)
+    done = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                           "%s::%s" % (os.path.abspath(__file__),
+                                       "test_a_noisy_place_lifts_the_floor_the_chip_reads")],
+                          env=env, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
 FALSE_BUSY_BOARD = json.dumps({"chip": "sx1262", "max_dbm": 22,
                                "cad_false_busy": "sx1262.8:0.30,lr2021.8:0.70,7:0.05"})
 FALSE_BUSY_LOOKS = 300
