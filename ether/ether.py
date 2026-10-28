@@ -2055,6 +2055,8 @@ class Ether(asyncio.DatagramProtocol):
                     sense_threshold_dbm(state.get("bw")):
                 self.send(rstation.sid, self.begin_message(frame, slot, faded, energy=True, t0=now))
             return
+        if self.ready_late(self.arrive, frame, msg, rstation, slot, level, now):
+            return
         if (rstation.sensing(slot) or (late and not frame.preamble_left(now))
                 or now < rstation.ready.get(slot, 0)):
             self.send(rstation.sid, self.begin_message(frame, slot, faded, energy=True, t0=now))
@@ -2072,6 +2074,24 @@ class Ether(asyncio.DatagramProtocol):
             log("frame %d takes station %d off frame %d" % (
                 frame.eid, rstation.sid, held.frame.eid))
         self.take_lock(frame, rstation, slot, level, faded, now, det)
+
+    def ready_late(self, rule, frame, msg, rstation, slot, level, now):
+        """True when `slot`'s radio is still re-arming as the frame starts and ready while enough of its preamble
+        is still to come: the frame is then handed to `rule` at the ready instant, as to a late listener
+        (`tell_late`'s judgement). Deaf to the whole frame, a receiver whose re-arm ended a few microseconds into
+        the preamble lost every other frame of a SUPE burst whose gap was shorter than that re-arm (T312)."""
+        ready = rstation.ready.get(slot, 0)
+        if now < ready and not rstation.sensing(slot) and frame.preamble_left(ready):
+            self.call_at(ready, self.arrive_when_ready, rule, frame, msg, rstation, slot, level, key=rstation.sid)
+            return True
+        return False
+
+    def arrive_when_ready(self, rule, frame, msg, rstation, slot, level):
+        """A frame that began while `slot`'s radio was re-arming, at the instant it is ready: `rule` judges it as
+        it judges a late listener's, while the slot still listens and the frame is still on the air."""
+        now = self.now()
+        if rstation.listening(slot) and frame.start_us <= now < frame.end_us:
+            rule(frame, msg, rstation, slot, level, now=now)
 
     def take_lock(self, frame, rstation, slot, level, faded, now, det=0):
         """A slot locks on to a frame, by detector `det`: its header's fate is
@@ -2122,6 +2142,8 @@ class Ether(asyncio.DatagramProtocol):
         if det is None or not self.locks_on(frame, rstation.sid, slot, now, det):
             return
         faded = self.level_at(frame, rstation.sid, now)
+        if self.ready_late(self.arrive_pairwise, frame, msg, rstation, slot, level, now):
+            return
         if (rstation.sensing(slot) or (late and not frame.preamble_left(now))
                 or now < rstation.ready.get(slot, 0)):
             self.send(rstation.sid, self.begin_message(frame, slot, faded, energy=True, t0=now))
