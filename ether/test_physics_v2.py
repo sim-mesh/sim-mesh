@@ -587,6 +587,24 @@ def test_a_cad_hears_a_neighbouring_sf_as_often_as_the_chip_does(v2, chip, slot_
     assert abs(same - own * n) <= 3.0 * math.sqrt(n * own * (1 - own)) + 1.0, (same, own * n)
 
 
+def test_a_cad_never_hears_a_frame_far_under_its_tables_range():
+    """Below the bench's lowest point a CAD table's odds fall along the
+    table's own first rise to nothing (`reach`, T315). `interp` alone held
+    the edge's odds there, so a frame at the never-heard loss (float32's
+    largest) was sensed as often as one at the table's edge."""
+    physics = ether_module.Physics(**tables())
+    seen = 0
+    for chip in physics.chips:
+        for sf, points in (physics.chip(chip).get("cad_preamble") or {}).items():
+            sf = int(sf)
+            x0, y0 = float(points[0][0]), float(points[0][1])
+            assert physics.cad_preamble(chip, sf, x0) == pytest.approx(y0)
+            assert physics.cad_preamble(chip, sf, x0 - 0.1) < y0
+            assert physics.cad_preamble(chip, sf, -3.4e38) == 0.0
+            seen += 1
+    assert seen, "no chip states a cad_preamble table"
+
+
 def test_a_cad_two_spreading_factors_off_never_hears_it(v2):
     """SF5 and SF7, on either chip, in either direction (physics-v2.yaml
     `sense`: no figure for "7>5" or "5>7") -- `sense_factor` is 0 there, so

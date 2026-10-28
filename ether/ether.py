@@ -464,6 +464,24 @@ def interp(points, x):
     return points[-1][1]
 
 
+def reach(points, x):
+    """How much of a detection table's odds hold at `x`: all of them within its
+    range and above it; below it, a share falling along the table's own first
+    slope to nothing. The bench measured no lower point, and `interp` holds
+    the first point's odds below the table: read alone, a frame any distance
+    under the floor would be detected as often as one at the table's edge
+    (T315: the SX1262's SF7 CAD sensed frames at -3.4e38 dBm 72 % of the
+    time in their preamble)."""
+    points = [(float(a), float(b)) for a, b in points]
+    if len(points) < 2 or x >= points[0][0] or points[0][1] <= 0.0:
+        return 1.0
+    x0, y0 = points[0]
+    for x1, y1 in points[1:]:
+        if x1 > x0 and y1 > y0:     # the first rise the table shows
+            return max(0.0, 1.0 - (y1 - y0) / (x1 - x0) * (x0 - x) / y0)
+    return 1.0                      # a table that never rises states no fall
+
+
 def curve_sf(sf):
     """The spreading factor the error curve is taken at: a frame that named
     none, or one outside the datasheet's, at the slowest."""
@@ -846,7 +864,7 @@ class Physics:
         points = (self.chip(name).get("cad_frame") or {}).get(sf)
         if points is None:
             points = (self.chip(name).get("cad_frame") or {}).get(str(sf))
-        return interp(points, snr_db) if points else 0.0
+        return interp(points, snr_db) * reach(points, snr_db) if points else 0.0
 
     def cad_preamble(self, name, sf, snr_db):
         """How often a CAD at `sf`'s own spreading factor detects a frame at
@@ -859,7 +877,7 @@ class Physics:
         points = (self.chip(name).get("cad_preamble") or {}).get(sf)
         if points is None:
             points = (self.chip(name).get("cad_preamble") or {}).get(str(sf))
-        return interp(points, snr_db) if points else 0.0
+        return interp(points, snr_db) * reach(points, snr_db) if points else 0.0
 
     def cad_payload_excess(self, name, sf):
         """How much more a CAD at `sf` detects a frame at `sf` once past its
@@ -2653,7 +2671,12 @@ class Ether(asyncio.DatagramProtocol):
             p = self.physics.cad_preamble(chip, frame.sf,
                                           self.cad_snr_db(frame, rstation.sid, now)) * factor
         elif slot_sf == frame.sf:
-            p = self.physics.cad_payload_excess(chip, frame.sf)
+            # The bench's excess past the preamble, as far as the same CAD
+            # reaches at this frame's SNR (`reach`, T315).
+            pre = self.physics.chip(chip).get("cad_preamble") or {}
+            points = pre.get(frame.sf) or pre.get(str(frame.sf)) or []
+            p = (self.physics.cad_payload_excess(chip, frame.sf)
+                 * reach(points, self.cad_snr_db(frame, rstation.sid, now)))
         else:
             p = 0.0
         return self.draw(frame, rstation.sid, slot, "lock") < p
