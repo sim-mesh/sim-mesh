@@ -43,12 +43,23 @@ and every call names a `station`, which offers:
     rpc                   framed RPC on its console (rpc_query, below), or None
                           before its process has started
     await restart()       its process stopped, for the supervisor to start again
-    report(event, **f)    an event for the run's record (events.jsonl), at the
-                          run's T: what a category's analysis counts
+    report(event, at=None, **f)
+                          an event for the run's record (events.jsonl), at the
+                          run's T, or in a virtual-time run at `at` (node time,
+                          microseconds) or at the T of the console line it is
+                          reported from (line_t): what a category's analysis
+                          counts
+    line_t                the node time the console line being handled was
+                          written at (`line_time`, below), or None
 
 **Callbacks.** `console_line(station, line)` is called with every line the
 station prints, in order, as sim-mesh reads it; a driver that tells sim-mesh
-what happened (a message delivered) does it from there with `report`.
+what happened (a message delivered) does it from there with `report`. Before
+it, `line_time(line)` gives the node time the line was written at, in
+microseconds, where the firmware's console prints it; in a virtual-time run
+what `console_line` reports is then put at that T, not at the T sim-mesh read
+the line, which depends on when the host ran the pty thread. None, the
+default, keeps the T it was read at.
 
 **Messages.** A category whose messages carry sim-mesh's id in their text
 (`meshcore`, `meshtastic`) reports them with `msg_status(station, mid,
@@ -242,6 +253,12 @@ class Driver:
 
     def console_line(self, station, line):
         """One line the station printed."""
+
+    def line_time(self, line):
+        """The node time `line` was written at, in microseconds, where the
+        firmware's console prints it; None puts what the line reports at the T
+        sim-mesh read it."""
+        return None
 
     # ---- helpers ---------------------------------------------------------
 
