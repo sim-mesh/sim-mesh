@@ -98,7 +98,7 @@ class ReticulumDriver(Driver):
     def __init__(self, firmware):
         super().__init__(firmware)
         self.coupled = {}       # station name -> {firmware's id: mid}
-        self.orphans = {}       # station name -> OrderedDict(firmware's id -> [(status, why)])
+        self.orphans = {}       # station name -> OrderedDict(firmware's id -> [(status, why, line_t)])
 
     async def role(self, station, role):
         raise self.cannot("role")
@@ -126,22 +126,24 @@ class ReticulumDriver(Driver):
 
     # ---- what became of a message ----------------------------------------
 
-    def lxmf_status(self, station, mid, status, why=None):
-        """Report a message's status under sim-mesh's id."""
+    def lxmf_status(self, station, mid, status, why=None, at=None):
+        """Report a message's status under sim-mesh's id (`at`: as
+        `station.report`)."""
         fields = {"mid": mid, "status": status}
         if why:
             fields["why"] = why
-        station.report(EVENT, **fields)
+        station.report(EVENT, at=at, **fields)
 
     def lxmf_couple(self, station, mid, native):
         """The firmware's id `native` is sim-mesh's `mid`: what the station
-        said of it before now is reported."""
+        said of it before now is reported, each at the T of the console line
+        it came from."""
         self.coupled.setdefault(station.name, {})[native] = mid
-        for status, why in self.orphans.get(station.name, {}).pop(native, []):
+        for status, why, at in self.orphans.get(station.name, {}).pop(native, []):
             if status == ID_EVENT:
-                station.report(ID_EVENT, mid=mid, message_id=why)
+                station.report(ID_EVENT, at=at, mid=mid, message_id=why)
             else:
-                self.lxmf_status(station, mid, status, why)
+                self.lxmf_status(station, mid, status, why, at)
 
     def lxmf_coupled(self, station, native):
         """sim-mesh's id for the firmware's `native`, or None."""
@@ -155,7 +157,7 @@ class ReticulumDriver(Driver):
             self.lxmf_status(station, mid, status, why)
             return True
         held = self.orphans.setdefault(station.name, OrderedDict())
-        held.setdefault(native, []).append((status, why))
+        held.setdefault(native, []).append((status, why, station.line_t))
         while len(held) > ORPHANS_MAX:
             held.popitem(last=False)
         return False
@@ -168,7 +170,7 @@ class ReticulumDriver(Driver):
             station.report(ID_EVENT, mid=mid, message_id=message_id)
             return
         held = self.orphans.setdefault(station.name, OrderedDict())
-        held.setdefault(native, []).append((ID_EVENT, message_id))
+        held.setdefault(native, []).append((ID_EVENT, message_id, station.line_t))
         while len(held) > ORPHANS_MAX:
             held.popitem(last=False)
 

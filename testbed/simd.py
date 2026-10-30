@@ -697,10 +697,12 @@ class Simd:
 
     def station_event(self, station, event, fields):
         """An event a station's driver reported, into the run's events.jsonl
-        at this T: what a category's analysis counts (a message delivered)."""
+        at this T, or at the T the station wrote the console line it came from
+        when the station gives it (`t`, Station.report): what a category's
+        analysis counts (a message delivered)."""
         if self.run is None or self.stations.get(station.name) is not station:
             return
-        line = dict(fields, t=self.ether.now(), node=station.name, event=event)
+        line = dict(fields, t=fields.get("t", self.ether.now()), node=station.name, event=event)
         try:
             with open(os.path.join(self.run.dir, EVENTS_FILE), "a", encoding="utf-8") as f:
                 f.write(json.dumps(line, default=str) + "\n")

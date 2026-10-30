@@ -311,6 +311,7 @@ class Station:
         self.on_event = on_event        # (station, event, fields): what its driver reports
         self.board = None
         self.line_tail = ""             # console text after the last newline
+        self.line_t = None              # the node time the line being handled was written at (line_time)
         # Whether the driver wants every console line: only then does the pty
         # thread hand console text to this loop when no window is open.
         self.hears_lines = (type(driver).console_line
@@ -366,9 +367,17 @@ class Station:
         else:
             await asyncio.sleep(seconds)
 
-    def report(self, event, **fields):
-        """An event from the station's driver, for the run's record."""
+    def report(self, event, at=None, **fields):
+        """An event from the station's driver, for the run's record. In a
+        virtual-time run it is put at `at`, the node time it happened at in
+        microseconds when the driver knows it, else, reported from a console
+        line, at the T the station wrote the line when its driver can read it
+        (`line_time`): the T the pty thread read it at depends on when the
+        host ran that thread."""
         if self.on_event is not None:
+            t = self.line_t if at is None else at
+            if t is not None and self.clock is not None:
+                fields["t"] = t
             self.on_event(self, str(event), fields)
 
     def console_text(self, text):
@@ -378,11 +387,15 @@ class Station:
         lines = (self.line_tail + text).split("\n")
         self.line_tail = lines.pop()
         for line in lines:
+            line = line.rstrip("\r")
             try:
-                self.driver.console_line(self, line.rstrip("\r"))
+                self.line_t = self.driver.line_time(line)
+                self.driver.console_line(self, line)
             except Exception as err:     # noqa: BLE001 - a firmware's callback, reported
                 log("station %s: its driver's console_line failed: %s: %s"
                     % (self.name, type(err).__name__, err))
+            finally:
+                self.line_t = None
 
     @property
     def configured(self):

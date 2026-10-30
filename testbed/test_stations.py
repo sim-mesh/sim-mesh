@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import rpc  # noqa: E402
 import stations  # noqa: E402
 from sim_mesh.driver import Driver  # noqa: E402
+from sim_mesh.reticulum.driver import EVENT, ID_EVENT, ReticulumDriver  # noqa: E402
 
 
 class StubKind(Driver):
@@ -106,3 +107,49 @@ def test_what_a_station_wrote_before_it_exited_is_all_in_the_log(tmp_path):
     asyncio.run(main())
     log = (tmp_path / "charlie" / "log").read_bytes()
     assert body in log
+
+
+class TimedKind(StubKind):
+    """A driver whose firmware prints its node time first on a line, and
+    which reports every line it hears."""
+
+    def line_time(self, line):
+        head = line.split(" ", 1)[0]
+        return int(head) if head.isdigit() else None
+
+    def console_line(self, station, line):
+        super().console_line(station, line)
+        station.report("seen", line=line)
+
+
+def test_what_a_line_reports_is_put_at_the_time_its_station_wrote_it(tmp_path):
+    events = []
+
+    def station(clock):
+        return stations.Station("alpha", 1, str(tmp_path / "alpha"), TimedKind("unused"), "",
+                                clock=clock, on_event=lambda st, event, fields: events.append((event, fields)))
+
+    virtual = station(object())
+    virtual.console_text("1500 one\nno time here\n")
+    virtual.report("by hand")
+    virtual.report("at a time", at=7)
+    station(None).console_text("1500 in real time\n")
+    assert events == [("seen", {"line": "1500 one", "t": 1500}),
+                      ("seen", {"line": "no time here"}),
+                      ("by hand", {}),
+                      ("at a time", {"t": 7}),
+                      ("seen", {"line": "1500 in real time"})]
+
+
+def test_a_status_held_until_its_id_is_coupled_keeps_the_time_of_its_line(tmp_path):
+    events = []
+    driver = ReticulumDriver({"firmware": "stub", "exec": "unused", "env": {}})
+    station = stations.Station("alpha", 1, str(tmp_path / "alpha"), driver, "", clock=object(),
+                               on_event=lambda st, event, fields: events.append((event, fields)))
+    station.line_t = 1500
+    driver.lxmf_native(station, "f1", "sent")
+    driver.lxmf_message_id(station, "f1", "m1")
+    station.line_t = None
+    driver.lxmf_couple(station, "s1", "f1")
+    assert events == [(EVENT, {"mid": "s1", "status": "sent", "t": 1500}),
+                      (ID_EVENT, {"mid": "s1", "message_id": "m1", "t": 1500})]
