@@ -734,6 +734,28 @@ def test_a_slot_is_deaf_to_a_frame_that_starts_before_its_radio_is_ready(tmp_pat
         bed.close()
 
 
+@pytest.mark.parametrize("pairwise", [False, True])
+def test_a_slot_ready_while_a_frames_preamble_still_runs_takes_it_late(tmp_path, pairwise):
+    """A frame that starts while the radio is still re-arming is not lost to it when the radio is ready while
+    enough of the preamble is still to come: at `ready_at` the slot is a late listener, judged as `tell_late`
+    judges one (T312: a SUPE burst's next frame, starting 39 µs before the receiver's re-arm ended, was lost to
+    it every time)."""
+    bed = Bench(tmp_path, "real", pairwise)
+    try:
+        bed.link(1, 2, NEAR_DB)
+        a, b = bed(1), bed(2)
+        a.hello()
+        b.hello()
+        b.state("RX", ready_at=b.t + 60_000)
+        a.tx(43, payload=b"ready mid-preamble", span_us=300_000, pre_us=200_000)
+        assert "cad" not in b.expect("rx_begin")
+        end = b.expect("rx_end")
+        assert end["verdict"] == "clean"
+        assert base64.b64decode(end["payload"]) == b"ready mid-preamble"
+    finally:
+        bed.close()
+
+
 def test_a_receiver_that_leaves_rx_mid_frame_is_not_told_how_it_ended(ether):
     """Out of RX into standby, the chip lets go of the frame it was following,
     and the medium rules on nothing it did not receive: no rx_end, and none in
