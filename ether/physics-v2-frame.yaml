@@ -1,0 +1,92 @@
+# Physics v2, the channel check refit: the whole-frame detection a
+# corrected bench measured on 15 October 2026 (reticulum
+# docs/bench-results-2026-10-15/, the correction to 14 October's reading in
+# ether/physics-v2.yaml's `cad_preamble`/`cad_payload_excess` -- see
+# `cad_frame` below). Every other figure here is 13-14 October's, unchanged,
+# copied from physics-v2.yaml so this file stands on its own with
+# `--physics`. ether.py's `Ether.sensed` reads `cad_frame` ahead of
+# `cad_preamble` where a chip has one; physics-v2.yaml's own keys keep their
+# meaning, untouched.
+version: 2
+
+reference: {payload: 40, cr: 5, implicit: false, crc: true, bw: 125000, per: 0.10}
+
+chips:
+  sx1262:
+    sinr_limit_db: {5: -2.2, 6: -5.3, 7: -8.3}
+    interferer_weight_db: {"5<6": 1.1, "6<5": 1.4, "7<6": 0.9}
+    capture:
+      earlier: {half_db: 1.4, width_db: 2.8}
+      later:
+        preamble: [[-0.5, 0.00], [-0.3, 0.05], [0.6, 0.05], [1.3, 0.15], [1.9, 0.35], [3.2, 0.78], [5.8, 1.00]]
+        header: [[2.2, 0.00], [3.0, 0.05], [3.4, 0.10], [5.9, 0.40], [8.5, 0.55], [8.8, 0.70], [11.2, 0.75]]
+    capture_by_sf:
+      6:
+        earlier: {half_db: 0.1, width_db: 2.9}
+        later:
+          preamble: [[-0.5, 0.00], [0.4, 0.70], [1.9, 0.95], [3.1, 1.00]]
+          header: [[0.4, 0.00], [1.9, 0.14], [3.1, 0.50], [5.9, 0.89], [8.6, 0.95]]
+    sense: {"6>7": 0.38, "7>6": 0.23, "5>6": 0.23, "6>5": 0.14}
+    # A CAD at this chip's own spreading factor detects a frame anywhere on
+    # the air, from its onset to its end, by SNR (15 October 2026,
+    # channel-looks.csv, `where`=frame, `look_waits`=no; R, the SX1262, at
+    # its driver's own det_peak, SF + 13). Each cell is its own level step's
+    # SNR, not the attenuator setting: the path drifted several dB over the
+    # morning. Pooled, monotone (adjacent cells out of order pooled, as
+    # physics-v2.yaml's `capture`); every raw cell checked against this
+    # one's prediction, two-sided binomial, holds but one of 59 across both
+    # chips, a cell the pooling itself merged past (`test_physics_v2.py`).
+    # The lowest point is where a delivered
+    # frame's own SNR could still be read (a step with none delivered has
+    # no median to join by); below it the bench's own numbers (a payload
+    # look still hit 21 % of cells with nothing delivered at SF5) say the
+    # true curve keeps falling toward `cad_false_busy`, unmeasured by SNR.
+    cad_frame:
+      5: [[-3.25, 0.412], [-2.5, 0.618], [-1.25, 0.676], [-1.0, 0.771], [-0.5, 0.845], [0.5, 0.872], [3.75, 1.00]]
+      6: [[-7.0, 0.283], [-6.0, 0.429], [-5.0, 0.607], [-4.0, 0.791], [-3.5, 0.809], [-2.75, 0.878], [-2.25, 0.934], [5.5, 0.983]]
+      7: [[-9.25, 0.377], [-8.75, 0.598], [-7.5, 0.683], [-6.5, 0.875], [-6.0, 0.885], [-5.0, 0.989], [6.0, 1.00]]
+    # How often a channel check reads a clear channel busy, per look, by its
+    # spreading factor, the looks taken as independent: this chip's own
+    # figures at its driver's det_peak (SF + 13), fitted from the 15 October
+    # bench's gap looks (`where`=gap, `look_waits`=no; 620-740 looks a
+    # spreading factor). SF5 reads highest, as its `cad_frame` curve is the
+    # noisiest of the three. The chip model applies these (radio/src/busy.h),
+    # the ether passes them on in SIM_MESH_BOARD.
+    cad_false_busy: {5: 0.054, 6: 0.036, 7: 0.041}
+  lr2021:
+    sinr_limit_db: {5: -3.7, 6: -5.55, 7: -8.9}
+    interferer_weight_db: {"5<6": 1.5, "6<5": 0.75, "7<6": 0.8}
+    capture:
+      earlier: {half_db: 1.0, width_db: 2.2}
+      later:
+        preamble: [[-0.5, 0.00], [0.5, 0.01], [1.9, 0.29], [3.0, 0.72], [4.2, 0.95], [5.6, 1.00]]
+        header: [[-0.5, 0.00], [0.5, 0.03], [1.9, 0.10], [3.0, 0.26], [4.9, 0.87], [12.6, 0.90]]
+    capture_by_sf:
+      6:
+        earlier: {half_db: 0.6, width_db: 1.4}
+        later:
+          preamble: [[0.2, 0.00], [1.9, 0.86], [3.0, 0.95]]
+          header: [[0.2, 0.00], [1.9, 0.33], [3.0, 1.00]]
+    sense: {"6>7": 0.70, "7>6": 0.60, "5>6": 0.61, "6>5": 0.58}
+    # As the SX1262's `cad_frame`, this chip's own (15 October 2026,
+    # channel-looks.csv, B, `det_peak` 48, main's own). Replaces
+    # physics-v2.yaml's `cad_preamble`/`cad_payload_excess`: those read a
+    # preamble-only effect in 14 October's looks, which waited for an
+    # already-locked frame to end and so landed in the gap that followed
+    # rather than the payload, making the payload look all but invisible to
+    # a look that never was one. With this corrected bench, both chips find
+    # the whole frame, the payload included, falling with its SNR and
+    # continuing below the point it stops decoding.
+    cad_frame:
+      5: [[-4.0, 0.395], [-2.5, 0.55], [-2.25, 0.779], [0.75, 0.971], [1.25, 0.974], [10.0, 1.00]]
+      6: [[-7.0, 0.444], [-5.75, 0.652], [-4.25, 0.924], [-2.0, 0.955], [13.25, 0.957]]
+      7: [[-9.5, 0.542], [-9.25, 0.745], [-8.0, 0.776], [-6.5, 0.984], [-2.0, 0.992]]
+    # As the SX1262's, at this chip's own det_peak (48): fitted from the 15
+    # October bench's gap looks, 639-820 a spreading factor. Close to
+    # physics-v2.yaml's 0.01/0.02/0.03 (14 October, det_peak 48 also): the
+    # two benches agree to within a point or two.
+    cad_false_busy: {5: 0.031, 6: 0.026, 7: 0.027}
+    # As physics-v2.yaml's: this board's receiver against the SX1262's,
+    # unchanged (sensitivity-steps.csv, 14 October 2026 -- the 15 October
+    # bench did not redo this sweep).
+    noise_figure_offset_db: 6.2

@@ -43,4 +43,22 @@ struct BoardBusy {
  *  `[<chip>.]<command>:<µs>` is said on stderr and left out. */
 BoardBusy readBoardBusy(const char* chip);
 
+/** How often a channel check reads a clear channel busy, per look, by
+ *  spreading factor: SIM_MESH_BOARD's `cad_false_busy`, `[<chip>.]<sf>:<share>`
+ *  entries separated by commas, qualified as busy_us's are. The figures are
+ *  physics v2's (ether/physics-v2.yaml), which testbed/boards.py writes here.
+ *  Unset, a clear channel never reads busy. */
+struct BoardFalseBusy {
+    std::vector<std::pair<int, double>> bySf;
+    double at(int sf) const;    /* 0 for a spreading factor without a figure */
+};
+
+BoardFalseBusy readBoardFalseBusy(const char* chip);
+
+/** Whether one look at `sf` reads a clear channel busy: a draw that is a
+ *  function of the run's seed (SIM_MESH_SEED), the station (SIM_MESH_NODE_ID),
+ *  the slot and the look's start alone, so a run repeats, and the firmware's
+ *  own randomness (the shim's) is not touched. */
+bool falseBusyLook(const BoardFalseBusy& b, int sf, int slot, int64_t startUs);
+
 #endif

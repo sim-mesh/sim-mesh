@@ -1,0 +1,178 @@
+# Physics v2: the radio model as a bench measured it on 13 October 2026, on
+# an SX1262 (a RAK4630) and an LR2021 (two XIAO nRF54L15). The ether reads
+# this file with `--physics` (simd's and ether.py's); ether.py's "Physics v2"
+# table says which rule each figure feeds, ether/INTERNALS.md "Physics v2"
+# how. Every figure here is the bench's; what it does not cover is said beside
+# it. Measured at SF7, 125 kHz, CR 4/5, 16-symbol preambles unless stated,
+# with the frames 75-80 dB over the receivers' floors: noise played no part.
+version: 2
+
+# The frame `sinr_limit_db` is stated for: 40 bytes, CR 4/5, an explicit
+# header with CRC, at 125 kHz, lost one time in ten at that ratio.
+reference: {payload: 40, cr: 5, implicit: false, crc: true, bw: 125000, per: 0.10}
+
+chips:
+  sx1262:
+    # Another spreading factor is noise: the signal-to-interference ratio at
+    # which the reference frame at this spreading factor fails one time in
+    # ten under a frame at another one (B5, twelve curves, 13-14 October
+    # 2026). Measured: SF5 under SF6 -1.1, under SF7 -2.2 (1 % at -1.2); SF6
+    # under SF5 -3.9, under SF7 -5.3 (-3.1); SF7 under SF5 -8.3 (-7.5) and
+    # under SF6 -7.4 (-6.3). From 10 % to 1 % the bench's curves span
+    # 0.8-2.2 dB. SF8 to SF12 are unmeasured and take the curve's own limit
+    # (the datasheet's SNR), which an SX1272 measurement (ether.py's
+    # INTER_SF_REJECTION_DB) puts 1-5 dB on the pessimistic side there.
+    sinr_limit_db: {5: -2.2, 6: -5.3, 7: -8.3}
+    # Each wanted spreading factor is anchored on one measured pair above
+    # (SF5 and SF6 under SF7, SF7 under SF5): the other pair's interferer is
+    # counted at this dB offset first, inside `penalty_db`'s sum
+    # (Σ P·10^(w/10)), so the one curve reads both pairs right. Keyed
+    # "<wanted><interferer>"; 0 for a pair without a figure, where its power
+    # stands as it is — every pair two spreading factors off, and the far
+    # pair each wanted spreading factor is itself anchored on.
+    interferer_weight_db: {"5<6": 1.1, "6<5": 1.4, "7<6": 0.9}
+    # Two frames of one spreading factor at one receiver, the later one
+    # starting inside the earlier one, by d = the later's level less the
+    # earlier's at the receiver, in dB (1,939 trials at SF7; the earlier
+    # frame 120 bytes, the later 40). `earlier`: how often the earlier frame
+    # is still delivered, by d alone, as a logistic: half at `half_db`, 10 %
+    # to 90 % over `width_db` (fitted to 787 trials). `later`: how often the
+    # later frame is delivered, by the part of the earlier frame it starts
+    # in, points of [d, share] read as a straight line between them and held
+    # flat beyond: in the preamble (the sync word with it), in the header;
+    # never in the payload (0 of 87). A later frame that outlasts the earlier
+    # one (40 bytes under 120) follows the same rules: the earlier survives
+    # up to equal level and is gone by +3 dB, the later is never received
+    # from a payload start (0 of 60), though most of it is in the clear.
+    # `capture_by_sf` holds a spreading factor's own tables where measured
+    # (SF6, 40 bytes against 40: the earlier frame is lost sooner, 20 of 56
+    # at +0.4 dB, and header starts are captured more readily, 10 of 20 at
+    # +3.1 and 36 of 39 from +5.9); the rest take `capture`. SF5 is
+    # unmeasured. Where a later frame starts within the preamble matters
+    # (at SF6 a start at its eighth symbol won 14 of 20 at +0.4 dB) and is
+    # not modelled: one pair of points so far. The SNR a delivered frame
+    # reports is its signal over the noise and everything on the air during
+    # its last symbol, as both chips report it (the same rule for every
+    # frame; ether.py `end_message`).
+    # Fitted on the trials of different frames (identical 0), both lengths
+    # pooled at SF7: the logistic by likelihood (1,147 trials), the points
+    # the pooled cells made monotone (adjacent cells out of order pooled).
+    capture:
+      earlier: {half_db: 1.4, width_db: 2.8}
+      later:
+        preamble: [[-0.5, 0.00], [-0.3, 0.05], [0.6, 0.05], [1.3, 0.15], [1.9, 0.35], [3.2, 0.78], [5.8, 1.00]]
+        header: [[2.2, 0.00], [3.0, 0.05], [3.4, 0.10], [5.9, 0.40], [8.5, 0.55], [8.8, 0.70], [11.2, 0.75]]
+    capture_by_sf:
+      6:
+        # 344 trials; the preamble's first point is assumed (no capture of a
+        # weaker later frame, as at SF7 near equal level).
+        earlier: {half_db: 0.1, width_db: 2.9}
+        later:
+          preamble: [[-0.5, 0.00], [0.4, 0.70], [1.9, 0.95], [3.1, 1.00]]
+          header: [[0.4, 0.00], [1.9, 0.14], [3.1, 0.50], [5.9, 0.89], [8.6, 0.95]]
+    # How often a channel check hears a strong frame at another spreading
+    # factor, "<the check's SF>><the frame's SF>", per look, with the clear
+    # channel's false busy below taken out. A look is the receiver's lock
+    # first, then a two-symbol CAD at the node's own spreading factor, the
+    # LR2021's side detectors off. Two spreading factors apart it never
+    # does, on either chip, in either direction: a pair not listed is 0.
+    # Measured at -30 to -41 dBm only; at weak levels the lock odds at the
+    # check's own spreading factor scale the figure, which is an assumption.
+    # SF5 against SF6, 14 October 2026: its own figures, net of false
+    # alarms, no longer SF6 against SF7's by the neighbour rule.
+    sense: {"6>7": 0.38, "7>6": 0.23, "5>6": 0.23, "6>5": 0.14}
+    # A CAD at this chip's own spreading factor, by the part of a frame on
+    # the air a look falls in (`Ether.cad_look_part`): in the preamble, from
+    # about 2 ms after it started to the preamble's end, the hit rate by
+    # SNR; past it, `cad_payload_excess` alone (none measured for this chip,
+    # so none applies). This chip had no preamble looks on the 14 October
+    # 2026 bench (reticulum docs/bench-results-2026-10-14/, channel-looks.csv
+    # is the LR2021's, B, alone): its SNR-domain curve stands in here, an
+    # assumption -- the two chips decode at much the same SNR by their own
+    # estimate (sensitivity-steps.csv), so the figure may read close, but
+    # nothing measured this chip's own CAD correlator against it.
+    cad_preamble:
+      5: [[-4.2, 0.45], [-3.5, 0.64], [-3.2, 0.68]]
+      6: [[-7.2, 0.76], [-6.5, 0.78], [-5.5, 0.94], [-5.0, 0.96], [-4.0, 1.00]]
+      7: [[-9.5, 0.72], [-8.8, 0.92], [-7.8, 0.98]]
+    # How often a channel check reads a clear channel busy, per look, by its
+    # spreading factor, the looks taken as independent: what a send meets,
+    # the lock first and then the CAD at the det_peak the firmware shipped
+    # on 13 October 2026 (40). A CAD alone reads a quiet channel busy far
+    # less (this chip 5 % at SF7, an LR2021 0.5-1.5 % at the datasheet's
+    # thresholds); a firmware that ships another det_peak changes these
+    # figures and nothing else. SF5 is unmeasured on this chip and takes
+    # the low end of its spread. The chip model applies these
+    # (radio/src/busy.h), the ether passes them on in SIM_MESH_BOARD.
+    cad_false_busy: {5: 0.07, 6: 0.10, 7: 0.13}
+  lr2021:
+    # As for the SX1262, the LR2021's own figures: SF5 under SF6 -2.2, under
+    # SF7 -3.7 (two runs -3.8/-2.9, -3.6/-2.4); SF6 under SF5 -4.8, under
+    # SF7 -5.55 (two runs -5.6/-3.7, -5.5/-4.3); SF7 under SF5 -8.9 (-8.0)
+    # and under SF6 -8.1 (-7.2).
+    sinr_limit_db: {5: -3.7, 6: -5.55, 7: -8.9}
+    # As the SX1262's: SF5 and SF6 anchored under SF7, SF7 under SF5; the
+    # other pair's interferer counted at this dB offset first.
+    interferer_weight_db: {"5<6": 1.5, "6<5": 0.75, "7<6": 0.8}
+    # Fitted as the SX1262's: 1,315 trials at SF7, both lengths pooled.
+    capture:
+      earlier: {half_db: 1.0, width_db: 2.2}
+      later:
+        preamble: [[-0.5, 0.00], [0.5, 0.01], [1.9, 0.29], [3.0, 0.72], [4.2, 0.95], [5.6, 1.00]]
+        header: [[-0.5, 0.00], [0.5, 0.03], [1.9, 0.10], [3.0, 0.26], [4.9, 0.87], [12.6, 0.90]]
+    capture_by_sf:
+      6:
+        # 291 trials, 40 bytes against 40: the earlier frame survives 44 of
+        # 55 at +0.2 dB and 1 of 49 from +1.9; the later one is captured
+        # sooner than at SF7 (6 of 7 preamble starts at +1.9, every header
+        # start from +3.0).
+        earlier: {half_db: 0.6, width_db: 1.4}
+        later:
+          preamble: [[0.2, 0.00], [1.9, 0.86], [3.0, 0.95]]
+          header: [[0.2, 0.00], [1.9, 0.33], [3.0, 1.00]]
+    sense: {"6>7": 0.70, "7>6": 0.60, "5>6": 0.61, "6>5": 0.58}
+    # This chip's own CAD, by the part of a frame on the air a look falls in
+    # (`Ether.cad_look_part`): in the preamble, from about 2 ms after the
+    # frame started (the bench's own cut: hits rise from +1 ms, are full by
+    # +2 ms) to the preamble's end, the hit rate by SNR, at det_peak 48
+    # (15:29 run, channel-looks.csv, 30 looks a cell before the cut, 10-18 at
+    # SF5; 14 October 2026). Monotone, adjacent cells out of order pooled,
+    # as `capture`'s tables; every raw cell checked against this one's
+    # prediction, two-sided binomial, holds (`test_physics_v2.py`). SF5 is
+    # the noisiest of the three, as its `sense` and `cad_false_busy` already
+    # are. Past the preamble, hits run near the empty channel's own rate --
+    # `cad_payload_excess` alone carries the one exception found.
+    cad_preamble:
+      5: [[-4.2, 0.45], [-3.5, 0.64], [-3.2, 0.68]]
+      6: [[-7.2, 0.76], [-6.5, 0.78], [-5.5, 0.94], [-5.0, 0.96], [-4.0, 1.00]]
+      7: [[-9.5, 0.72], [-8.8, 0.92], [-7.8, 0.98]]
+    # Past the preamble, a CAD at SF7 finds a frame a little more than an
+    # empty channel, at det_peak 48 to 56, even 10-15 dB over the noise
+    # (19:48 run, A out of its tin, channel-looks.csv): 8, 11 and 15 points
+    # over that run's own paired gap looks (100 a cell). No other spreading
+    # factor, and no lower det_peak, showed a figure past the gap rate's own
+    # spread. At det_peak 48, the one the LR2021 driver ships at SF5-7.
+    cad_payload_excess: {7: 0.07}
+    # As the SX1262's, at this chip's own det_peak: 48 at SF5-7 now (14
+    # October 2026 bench, the gap looks pooled over both payload runs,
+    # channel-looks.csv), where 40 -- this chip's previous det_peak -- read
+    # 0.19/0.24/0.29.
+    cad_false_busy: {5: 0.01, 6: 0.02, 7: 0.03}
+    # This board's receiver against the SX1262's, fitted from
+    # sensitivity-steps.csv (14 October 2026): at equal transmit power, on
+    # the same path, it loses half its frames 4.9-5.8 dB of attenuation
+    # earlier at SF7, 5.5-5.7 at SF6, 7.5-7.7 at SF5 (two sweeps a spreading
+    # factor, R's power corrected to match B's); both chips decode at about
+    # the same SNR by their own estimate, so the gap is this board's own
+    # receive noise figure, not a sensitivity its curve already carries.
+    # Mean of the six 4.9-7.7 dB gaps; SF5's two are the widest and its
+    # sweeps the noisiest (the bench's own README calls its SNR estimate
+    # rough). Added to `noise_figure_db` for this chip's receiver alone
+    # (`Ether.noise`); where interference already dominates a frame's SINR
+    # it is unmoved by it (`Ether.interference_rise_db` reads the same
+    # raised floor and the offset cancels out of the sum the two feed).
+    # Keyed by chip, as the sim already names a receiver's radio for every
+    # other v2 table here (`Ether.chip_of`): the ether never sees "RAK" or
+    # "XIAO", only "sx1262"/"lr2021", and a board with no chip entry of its
+    # own takes the default chip's, as everything else in this file does.
+    noise_figure_offset_db: 6.2
