@@ -627,10 +627,10 @@ sim-mesh ships:
   3DBAG tile is left out);
 - **population**: the Zensus 2022 grid where the rectangle touches Germany,
   CBS's 2023 grid where it touches the Netherlands, Statistik Austria's
-  2026 grid where it touches Austria, WorldPop's 2025 grid in the United
-  States, none elsewhere;
+  2026 grid where it touches Austria, WorldPop's 2025 grids in the United
+  States and Chile, none elsewhere;
 - **land cover**: ESA WorldCover, with NLCD's classes over it in the
-  conterminous United States;
+  conterminous United States and MapBiomas's in mainland Chile;
 
 and always OpenStreetMap roads and places, and the ITU maps. The panel lists the sources chosen, each with what it is used
 for ("buildings inside its outline", "buildings outside Berlin LoD2 building
@@ -700,6 +700,8 @@ is fetched once, resumed where it stopped, and one its host does not have
 | 3DEP 1/3 arc-second terrain, 1° tiles | the United States | `prd-tnm.s3.amazonaws.com`: only the windows of the tiles meeting the rectangle |
 | Annual NLCD 2025 land cover, 30 m | the conterminous United States | `mrlc.gov`: one 1.5 GB zip |
 | WorldPop 2025 population, 3 arc-seconds | the United States | `data.worldpop.org`: one 1.5 GB GeoTIFF; the host does not resume a broken download |
+| MapBiomas Chile 2022 land cover, 30 m | mainland Chile | `storage.googleapis.com/mapbiomas-public`: one 160 MB GeoTIFF |
+| WorldPop 2025 population, 3 arc-seconds | Chile, Easter Island with it | `data.worldpop.org`: one 63 MB GeoTIFF; the host does not resume a broken download |
 
 Geofabrik's index, Berlin's feeds and the MeshCore node list are kept in
 `testbed/geodata/.cache/meta/` and asked again when a week old, or after the
@@ -857,7 +859,8 @@ europe:                             # a continent
   priority in each. Every national and regional terrain, surface and
   buildings source is 100 to GLO-30's and OpenStreetMap's
   10; Brandenburg's are 90, since its outline holds Berlin, whose own come
-  first there. NLCD's land cover is 100 to WorldCover's 10.
+  first there. NLCD's and MapBiomas's land cover are 100 to WorldCover's
+  10.
 
 Shipped beyond the worldwide set: Germany (every state's 1 m terrain and
 surface, every state's LoD2 but Hessen's, and the Zensus 2022 grid), the
@@ -867,8 +870,9 @@ surface, and Statistik Austria's 100 m population grid), lidar terrain and
 surface models in Belgium (Flanders), France, Norway, Estonia, Czechia,
 Spain (Andalucía, Catalonia, Navarra) and Malta, terrain models in Poland,
 Spain (Galicia) and Italy (South Tyrol with its surface, and five regions),
-and the United States (3DEP's 1/3 arc-second terrain, NLCD land cover and
-WorldPop's population grid).
+the United States (3DEP's 1/3 arc-second terrain, NLCD land cover and
+WorldPop's population grid), and Chile (MapBiomas land cover and WorldPop's
+population grid; Chile has no open lidar, so GLO-30 is its ground).
 
 An id is one source: a person's file may not take one sim-mesh ships (a
 second address for the same data is a mirror, in the shipped entry). Every

@@ -446,7 +446,8 @@ def test_the_shipped_sources_hold_together():
                              "navarra-mds", "galicia-mdt", "bz-dtm", "bz-dsm", "emilia-romagna-dtm",
                              "piemonte-dtm", "lombardia-dtm", "campania-dtm", "sicilia-mdt",
                              "mt-dtm", "mt-dsm",
-                             "usgs-3dep-13", "nlcd", "worldpop-us"]
+                             "usgs-3dep-13", "nlcd", "worldpop-us",
+                             "mapbiomas-cl", "worldpop-cl"]
     for source in SHIPPED.values():
         assert source.worldwide == (source.continent == sourcefile.GLOBAL)
         assert source.worldwide or source.outline["type"] in ("Polygon", "MultiPolygon")

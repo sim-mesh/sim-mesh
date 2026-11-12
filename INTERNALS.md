@@ -800,7 +800,7 @@ Austria's grid where it touches Austria, the lidar terrain and surface
 models of France, Flanders, Norway, Estonia, Czechia, Malta and four
 Spanish and Italian regions, and terrain models in Poland and six more
 regions, 3DEP, NLCD and WorldPop where it
-touches the United States, GLO-30 and OpenStreetMap everywhere) and says what
+touches the United States, MapBiomas and WorldPop where it touches Chile, GLO-30 and OpenStreetMap everywhere) and says what
 each is used for, so the page offers no choice and the dialog after
 **Build** reads the same list. `packbuild` hands each chosen source's files
 to the compiler input its format and layer go to (`packbuild.INPUTS`), never
