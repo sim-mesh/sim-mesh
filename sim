@@ -80,6 +80,8 @@
 #                                      where the system's is older, a C toolchain,
 #                                      cmake, Rust), and then whatever is not prebuilt
 #                                      is built. From then on `sim` runs here
+#     sim test [ID…]                   run tests from tests.yaml in sim-mesh's container
+#                                      defaults to smoke tests
 #
 # The simulation verbs (new, stop, pause, resume, list, plan, run) take --port, the front's
 # (default 8800).
@@ -307,7 +309,8 @@ remove_old_images() {
 
 # in_container MODE ARGS…: `./sim ARGS…` in sim-mesh's image. MODE is tools (a
 # verb of its own, nothing published), build (`sim build`, the same in the
-# development image), front (the front, in the foreground), daemon (the
+# development image), test (a test run, in the development image without
+# leaving .dev), front (the front, in the foreground), daemon (the
 # front, in the background) or dev (`sim dev`, in the foreground, in the
 # development image). `sim dev` and `sim build` leave .dev, which puts every
 # later MODE in the development image too.
@@ -317,7 +320,7 @@ in_container() {
     resolve_engine
     e=$ENGINE
     case "$mode" in dev|build) : > "$ROOT/.dev" ;; esac
-    if [ -e "$ROOT/.dev" ]; then
+    if [ -e "$ROOT/.dev" ] || [ "$mode" = test ]; then
         ensure_dev_image
         image=$DEV_IMAGE
     else
@@ -351,7 +354,7 @@ in_container() {
     [ -z "${SIM_MESH_IMAGE_REPO:-}" ] || args+=(-e "SIM_MESH_IMAGE_REPO=$SIM_MESH_IMAGE_REPO")
     # publish's upload to a GitHub release; the value stays out of the command line.
     [ -z "${GH_TOKEN:-}" ] || args+=(-e GH_TOKEN)
-    if [ "$mode" = tools ] || [ "$mode" = build ]; then
+    if [ "$mode" = tools ] || [ "$mode" = build ] || [ "$mode" = test ]; then
         args+=(-i)
         [ -t 0 ] && [ -t 1 ] && args+=(-t)
     else
@@ -897,6 +900,26 @@ cmd_install() {
     say "installed: start it with $0"
 }
 
+# test: run tests.yaml tests in sim container, in order to use current Dockerfile, same mounts and options
+cmd_test() {
+    ensure radio ether planner
+    python3 - "$ROOT" "$@" <<'PY'
+import subprocess, sys, yaml
+root, ids = sys.argv[1], sys.argv[2:]
+tests = {t["id"]: t for t in yaml.safe_load(open(f"{root}/tests.yaml"))["tests"]}
+unknown = [i for i in ids if i not in tests]
+if unknown:
+    sys.exit(f"sim: test: no test {', '.join(unknown)} (tests.yaml has {', '.join(tests)})")
+failed = []
+for i in ids or [i for i, t in tests.items() if t["tier"] == "smoke"]:
+    print(f"sim: test: {i}", file=sys.stderr, flush=True)
+    if subprocess.run(["bash", "-c", tests[i]["run"]], cwd=root).returncode:
+        failed.append(i)
+if failed:
+    sys.exit(f"sim: test: failed: {' '.join(failed)}")
+PY
+}
+
 # ---- dispatch -------------------------------------------------------------------
 
 EXEC_ENV=()
@@ -904,7 +927,7 @@ verb=${1:-}
 case "$verb" in
     -h|--help|help) usage; exit 0 ;;
     install) shift; cmd_install "$@"; exit $? ;;
-    ""|front|dev|build|-*|firmware|index|geodata|nodeset|source|new|stop|pause|resume|list|plan|run) ;;
+    ""|front|dev|build|-*|firmware|index|geodata|nodeset|source|new|stop|pause|resume|list|plan|run|test) ;;
     *) die "no verb '$verb' (sim help lists them)" ;;
 esac
 
@@ -928,9 +951,13 @@ if [ -z "${SIM_MESH_IN_CONTAINER:-}" ]; then
     [ -z "${GITHUB_TOKEN:-}" ] || [ -n "${GH_TOKEN:-}" ] || export GH_TOKEN=$GITHUB_TOKEN
 fi
 
+# test runs don't need GH tokens, and any test code could read and leak one
+[ "$verb" != test ] || unset GH_TOKEN GITHUB_TOKEN
+
 if want_container; then
     case "$verb" in
         firmware|index|geodata|nodeset|source) in_container tools "$@" ;;
+        test) in_container test "$@" ;;
         new|stop|pause|resume|list|plan) in_front "$@" ;;
         front) shift; in_container front "$@" ;;
         dev) in_container dev "$@" ;;
@@ -952,5 +979,6 @@ case "$verb" in
     front) shift; cmd_front "$@" ;;
     dev) shift; cmd_dev "$@" ;;
     build) shift; cmd_build "$@" ;;
+    test) shift; cmd_test "$@" ;;
     *) cmd_front "$@" ;;
 esac
