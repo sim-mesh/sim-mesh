@@ -1080,6 +1080,7 @@ class Frame:
         self.interferers = []   # frames that shared this one's band and air
         self.receivers = []     # (sid, slot, level) for each decoding receiver
         self.receptions = {}    # (sid, slot) -> its Reception there
+        self.missed = {}        # rsid -> the note of why it never started it (`Ether.miss`)
         self.levels = {}        # rsid -> dBm there, or None: never heard
         self.rice = {}          # rsid -> its fast fading there, dB (`Ether.rice_db`)
         self.key = None         # what its draws are keyed on (`Ether.key_of`)
@@ -2195,12 +2196,17 @@ class Ether(asyncio.DatagramProtocol):
             if rsid == sid:
                 continue
             if rstation.tx_until > start:
-                continue        # half duplex: its own frame is still going out
+                # half duplex: its own frame is still going out
+                self.miss(frame, rstation, rstation.slots[0] if rstation.slots else 0,
+                          "transmitting")
+                continue
             level = self.level_of(frame, rsid)
             if level is None:
                 continue        # the table says this pair never hears
             for slot in rstation.slots:
                 if not rstation.listening(slot):
+                    self.miss(frame, rstation, slot, "not listening",
+                              mode=(rstation.state(slot) or {}).get("mode"))
                     continue
                 if self.pairwise:
                     self.arrive_pairwise(frame, msg, rstation, slot, level)
@@ -2264,6 +2270,41 @@ class Ether(asyncio.DatagramProtocol):
         self.call_at(frame.end_us, self.deliver_end, reception, key=rstation.sid)
         return reception
 
+    def miss(self, frame, rstation, slot, why, mode=None, by=None):
+        """Note that a station that could hear `frame` has not started
+        receiving it, and why: `transmitting` (half duplex), `not listening`
+        (its slot in `mode`, neither RX nor CAD), `away` (another carrier or
+        band), `other settings` (on its carrier, another spreading factor,
+        sync word or IQ), `preamble` (the lock draw failed), `cad` (sensing,
+        not receiving), `re-arming` (its radio not ready yet), `late` (it
+        started listening past the preamble) or `locked` (following frame
+        `by`, which this one did not take it off). Could hear: the pair's
+        table level, unfaded, clears the frame's own threshold (`audible`).
+        The station's first reason stands; a reception it starts later, at
+        any slot, clears it (`take_lock`); what is left when the frame's air
+        is over goes into the record (`note_misses`)."""
+        if rstation.sid in frame.missed:
+            return
+        level = self.level_of(frame, rstation.sid)
+        if not self.audible(level, frame.bw, frame.sf):
+            return
+        note = {"type": "rx_miss", "slot": slot, "id": frame.eid, "from": frame.sid,
+                "t0": frame.start_us, "t_end": frame.end_us, "level": round(level),
+                "why": why}
+        if mode is not None:
+            note["mode"] = mode
+        if by is not None:
+            note["by"] = by
+        frame.missed[rstation.sid] = note
+
+    def note_misses(self, frames):
+        """Record each `rx_miss` these frames still hold (`miss`), as the
+        ether's own note: direction `note`, sent to no station."""
+        for frame in frames:
+            for rsid, note in frame.missed.items():
+                self.write_record("note", rsid, note)
+            frame.missed = {}
+
     def in_band_energy(self, rsid, state, now):
         """The summed level, in dBm, of every transmission on the air at `now`
         whose channel overlaps this receiver's."""
@@ -2297,6 +2338,7 @@ class Ether(asyncio.DatagramProtocol):
         """
         state = rstation.state(slot)
         if not in_band(frame.freq, frame.bw, state.get("freq"), state.get("bw")):
+            self.miss(frame, rstation, slot, "away")
             return
         late = now is not None and now > frame.start_us
         now = frame.start_us if now is None else now
@@ -2310,23 +2352,29 @@ class Ether(asyncio.DatagramProtocol):
             # off never (`sensed`); the sense threshold is an RSSI read's.
             if self.sensed(frame, rstation, slot, state, now):
                 self.send(rstation.sid, self.begin_message(frame, slot, faded, energy=True, t0=now))
+            self.miss(frame, rstation, slot, "cad")
             return
         decodable = det is not None and self.locks_on(frame, rstation.sid, slot, now, det)
         if not decodable:
+            self.miss(frame, rstation, slot, "other settings" if det is None else "preamble")
             if self.in_band_energy(rstation.sid, state, now) >= \
                     sense_threshold_dbm(state.get("bw")):
                 self.send(rstation.sid, self.begin_message(frame, slot, faded, energy=True, t0=now))
             return
         if self.ready_late(self.arrive, frame, msg, rstation, slot, level, now):
+            self.miss(frame, rstation, slot, "re-arming")
             return
         if (rstation.sensing(slot) or (late and not frame.preamble_left(now))
                 or now < rstation.ready.get(slot, 0)):
+            self.miss(frame, rstation, slot, "cad" if rstation.sensing(slot)
+                      else "re-arming" if now < rstation.ready.get(slot, 0) else "late")
             self.send(rstation.sid, self.begin_message(frame, slot, faded, energy=True, t0=now))
             return
         held = self.current_lock(rstation, slot, now)
         if held is not None and not self.takes(held, frame, rstation.sid, now):
             # The demodulator is busy with a frame this one does not take it
             # off: it is energy to this receiver, and lost to it.
+            self.miss(frame, rstation, slot, "locked", by=held.frame.eid)
             self.send(rstation.sid, self.begin_message(frame, slot, faded, energy=True, t0=now))
             self.open_reception(frame, rstation, slot, level, lost=True)
             return
@@ -2361,6 +2409,7 @@ class Ether(asyncio.DatagramProtocol):
         `t_hdr`."""
         reception = self.open_reception(frame, rstation, slot, level, now=now)
         reception.det = det
+        frame.missed.pop(rstation.sid, None)
         reception.hdr_ok = self.header_ok(frame, rstation.sid, slot)
         rstation.locks[slot] = reception
         if not reception.hdr_ok:
@@ -2408,12 +2457,16 @@ class Ether(asyncio.DatagramProtocol):
         if det and rstation.sensing(slot):
             det = None          # a CAD is the main detector's alone
         if det is None or not self.locks_on(frame, rstation.sid, slot, now, det):
+            self.miss(frame, rstation, slot, "other settings" if det is None else "preamble")
             return
         faded = self.level_at(frame, rstation.sid, now)
         if self.ready_late(self.arrive_pairwise, frame, msg, rstation, slot, level, now):
+            self.miss(frame, rstation, slot, "re-arming")
             return
         if (rstation.sensing(slot) or (late and not frame.preamble_left(now))
                 or now < rstation.ready.get(slot, 0)):
+            self.miss(frame, rstation, slot, "cad" if rstation.sensing(slot)
+                      else "re-arming" if now < rstation.ready.get(slot, 0) else "late")
             self.send(rstation.sid, self.begin_message(frame, slot, faded, energy=True, t0=now))
             return
         held = self.current_lock(rstation, slot, now)
@@ -2421,6 +2474,7 @@ class Ether(asyncio.DatagramProtocol):
                 not self.physics.interference
                 or round(faded) < round(self.level_at(held.frame, rstation.sid, now))
                 + PAIRWISE_CAPTURE_DB):
+            self.miss(frame, rstation, slot, "locked", by=held.frame.eid)
             self.send(rstation.sid, self.begin_message(frame, slot, faded, energy=True, t0=now))
             self.open_reception(frame, rstation, slot, level, lost=True)
             return
@@ -2833,6 +2887,7 @@ class Ether(asyncio.DatagramProtocol):
         """Drop frames whose air is long gone; collisions can no longer touch
         them. And the fading's knots before any frame still on the air: they
         are the same whenever drawn again."""
+        self.note_misses([f for f in self.frames if f.end_us <= now])
         self.frames = [f for f in self.frames if f.end_us > now]
         if self.knots:
             earliest = min([f.start_us for f in self.frames] + [now])
@@ -2840,6 +2895,7 @@ class Ether(asyncio.DatagramProtocol):
             self.knots = {key: z for key, z in self.knots.items() if key[2] >= k}
 
     def close(self):
+        self.note_misses(self.frames)
         if self.pace_timer is not None:
             self.pace_timer.cancel()
         if self.transport is not None:
@@ -3138,6 +3194,7 @@ class CoreEther(Ether):
             self.core.unwatch(sid, marks)
 
     def close(self):
+        self.note_misses(self.frames)       # while T can still be read
         self.loop.remove_reader(self.core.wake_fd)
         self.core.close()
         Ether.close(self)

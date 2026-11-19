@@ -1036,6 +1036,60 @@ def test_a_payload_that_fails_is_a_crc_error_at_t_end(medium):
     assert (end["verdict"], end["cause"], end["t"]) == ("crc", "noise", begin["t_end"])
 
 
+def noted(medium):
+    """The `rx_miss` notes the medium records, as (sid, note), once every
+    frame's air is over."""
+    notes = []
+    medium.write_record = lambda direction, sid, msg: notes.append((direction, sid, msg))
+    return notes
+
+
+def test_a_frame_a_hearer_never_starts_is_noted_with_why(medium):
+    """Half duplex and a slot not listening each leave an rx_miss naming the
+    reason; a reception, and a station too far to hear, leave none."""
+    inaudible = margin_loss(-20.0)
+    air = Air(medium, {(1, 2): NEAR_DB, (1, 3): NEAR_DB, (1, 4): NEAR_DB, (1, 5): inaudible},
+              states={4: {"mode": "STANDBY"}})
+    notes = noted(medium)
+    air.tx(3, b"three first", span_us=50_000)
+    air.run_to(1000)
+    air.tx(1, b"one", span_us=10_000)
+    air.run_to(60_000)
+    medium.close()
+    got = {sid: msg for direction, sid, msg in notes
+           if direction == "note" and msg["type"] == "rx_miss"}
+    assert set(got) == {3, 4}, got
+    assert got[3]["why"] == "transmitting" and got[3]["from"] == 1
+    assert (got[4]["why"], got[4]["mode"]) == ("not listening", "STANDBY")
+    assert got[4]["t_end"] - got[4]["t0"] == 10_000
+    assert air.told(2, "rx_end")[-1]["verdict"] == "clean"
+
+
+def test_a_frame_lost_to_a_receiver_locked_on_another_is_noted_by_it(medium):
+    air = Air(medium, {(3, 2): NEAR_DB, (1, 2): margin_loss(5.0)})
+    notes = noted(medium)
+    air.tx(3, b"held", span_us=100_000)
+    held, = air.told(2, "rx_begin")
+    air.run_to(1000)
+    air.tx(1, b"weaker", span_us=20_000)
+    air.run_to(200_000)
+    medium.close()
+    miss, = [m for d, s, m in notes if d == "note" and s == 2]
+    assert (miss["why"], miss["by"], miss["from"]) == ("locked", held["id"], 1)
+
+
+def test_a_slot_that_starts_listening_in_time_and_locks_leaves_no_miss(medium):
+    air = Air(medium, {(1, 2): NEAR_DB}, states={2: {"mode": "STANDBY"}})
+    notes = noted(medium)
+    air.tx(1, b"caught late", span_us=1_000_000)   # a 100 ms preamble
+    air.run_to(1000)
+    medium.recv_state(2, Air.ADDR, dict({"type": "state", "slot": 0}, **radio("RX")))
+    assert "cad" not in air.told(2, "rx_begin")[-1]
+    air.run_to(1_100_000)
+    medium.close()
+    assert [m for d, s, m in notes if d == "note"] == []
+
+
 def test_a_frames_draws_are_its_channels_not_the_runs_numbering():
     """Two arms differing only in a frame sent before, which renumbers every
     frame after it, rule the same on every frame they share."""
