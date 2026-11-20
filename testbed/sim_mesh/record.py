@@ -7,7 +7,10 @@ The stamp is T in seconds in a virtual-time run and the wall clock's ISO
 time in a real one. A line starting `#` is a comment (the ether writes one
 each time it opens the file). `in` is what a station told the ether (`hello`,
 `state`, `tx`), `out` what the ether told a station (`welcome`, `rx_begin`,
-`rx_end`). The record knows a frame's carrier, air time and bytes, and
+`rx_end`), and `note` the ether's own account, sent to no one (`rx_miss`: a
+station that could hear a frame and never started receiving it, and why;
+written once the frame's air is over, so its stamp can be later than the
+frame's `t_end`, which it carries). The record knows a frame's carrier, air time and bytes, and
 nothing about what the bytes mean.
 """
 

@@ -491,6 +491,28 @@ seconds in a virtual one.
 It is the account of what actually happened on the air, against which a
 station's own view can be checked — which frames went out, who was told about
 them, and how each reception ended.
+
+It also holds what no datagram says: for each frame, each station that could
+hear it (the pair's table level clears the frame's threshold, unfaded) and
+never started receiving it. That is a line of direction `note`, sent to no
+station:
+
+```
+<stamp>  note  <station id>  {"type": "rx_miss", "id", "from", "slot", "t0", "t_end", "level", "why"[, "mode"][, "by"]}
+```
+
+`why` is the station's first reason: `transmitting` (half duplex),
+`not listening` (its slot in `mode`), `away` (another carrier or band),
+`other settings` (another spreading factor, sync word or IQ on its carrier),
+`preamble` (it did not find the preamble), `cad` (sensing, not receiving),
+`re-arming` (its radio not ready yet), `late` (it started listening past the
+preamble), or `locked` (following frame `by`, which this one did not take it
+off; the `rx_begin` marked `cad` and the `rx_end` with cause `lost` go out to
+it as before). A station that starts the frame later, at any slot, has no
+note. Notes are written once the frame's air is over, at the next frame's
+start or when the ether closes, so a note's stamp can be later than its
+`t_end`; read the times from the note. With `rx_begin`, a station's
+receptions and its misses together are every frame it could hear.
 [`../testbed/seq.py`](../testbed/seq.py) draws it as a sequence diagram.
 
 ## Tests
