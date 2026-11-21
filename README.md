@@ -1913,7 +1913,8 @@ rule, how far and how fast every link's level wanders over time, and the K
 factor of a fast fade per frame; no fading of either kind unless given), and
 `--no-interference` (an oracle: every frame judged against noise alone),
 `--clock-ppm` (in virtual time, each station's crystal off by a draw within
-that many parts per million), and `--seed` and `--epoch` (the seed the ether's welcome
+that many parts per million), `--carrier-ppm` (each station's radio carrier
+off its stated frequency by a draw within that many parts per million), and `--seed` and `--epoch` (the seed the ether's welcome
 carries, which in a virtual-time run also keys every station's randomness,
 and the wall clock T 0 stands for; two runs of one network given both draw the
 same random bytes and the same timestamps).

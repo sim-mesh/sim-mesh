@@ -2587,3 +2587,64 @@ def test_an_idle_from_another_address_is_not_the_stations(conductor):
         other.close()
     idle(a, 1, 5_000)
     assert a.expect("run")["seq"] == 2
+
+
+def carrier_air(medium, bw, ppm_by_sid, loss_db=NEAR_DB):
+    """Station 1 heard well by station 2, both on `bw`, each radio's carrier
+    off by its own parts per million (`set_carriers`)."""
+    air = Air(medium, {(1, 2): loss_db}, states={1: {"bw": bw}, 2: {"bw": bw}})
+    medium.set_carriers(ppm_by_sid)
+    return air
+
+
+def test_two_tcxos_at_opposite_ends_still_hear_each_other_at_125_khz(medium):
+    """±2 ppm at 868 MHz is 3.5 kHz apart, well inside a quarter of 125 kHz:
+    the frame is decoded as with exact carriers."""
+    air = carrier_air(medium, BW, {1: 2.0, 2: -2.0})
+    t0 = medium.clock.t
+    air.tx(1, b"tcxo", bw=BW)
+    air.run_to(t0 + FRAME_US + 1)
+    end, = air.told(2, "rx_end")
+    assert end["verdict"] == "clean"
+
+
+def test_two_crystals_at_opposite_ends_are_deaf_to_each_other_at_31_khz(medium):
+    """±20 ppm is 34.7 kHz apart, past the 31.25 kHz channel itself: the
+    receiver is told nothing at all, neither a frame nor energy."""
+    air = carrier_air(medium, 31_250, {1: 20.0, 2: -20.0})
+    t0 = medium.clock.t
+    air.tx(1, b"xtal", bw=31_250)
+    air.run_to(t0 + 10 * FRAME_US)
+    assert air.told(2, "rx_begin") == [] and air.told(2, "rx_end") == []
+
+
+def test_crystals_past_the_tolerance_are_energy_not_a_frame_at_125_khz(medium):
+    """At 125 kHz the same ±20 ppm is past the quarter-bandwidth tolerance
+    but inside the channel: no frame is decoded, and a loud one is energy
+    there (above the sense threshold, -81 dBm at 125 kHz), while two radios
+    off by the same amount, the difference being what counts, hear each other."""
+    air = carrier_air(medium, BW, {1: 20.0, 2: -20.0}, loss_db=NEAR_DB - 10.0)
+    t0 = medium.clock.t
+    air.tx(1, b"xtal", bw=BW)
+    air.run_to(t0 + FRAME_US + 1)
+    assert air.told(2, "rx_end") == []
+    begins = air.told(2, "rx_begin")
+    assert begins and all(begin.get("cad") for begin in begins)
+
+    medium.set_carriers({1: 20.0, 2: 20.0})
+    t1 = medium.clock.t + 1
+    air.run_to(t1)
+    air.tx(1, b"same", bw=BW)
+    air.run_to(t1 + FRAME_US + 1)
+    end, = air.told(2, "rx_end")
+    assert end["verdict"] == "clean"
+
+
+def test_a_carrier_offset_keeps_the_stated_frequency_in_the_record():
+    """An exact radio's carrier is the stated figure itself, its type too, so
+    a run without offsets is recorded as before; an offset one moves by
+    exactly its parts per million."""
+    assert ether_module.offset_carrier(FREQ, None) is FREQ
+    assert ether_module.offset_carrier(FREQ, 0.0) is FREQ
+    assert ether_module.offset_carrier(None, 5.0) is None
+    assert ether_module.offset_carrier(FREQ, 10.0) == pytest.approx(FREQ + 8_681.0)

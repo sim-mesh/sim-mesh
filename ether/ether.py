@@ -322,6 +322,15 @@ STRICT_TIME = os.environ.get("SIM_MESH_STRICT_TIME", "") == "1"
 SETTLE_TURNS = 1000
 
 
+def offset_carrier(freq, ppm):
+    """A stated carrier as a radio whose reference is `ppm` parts per million
+    off puts it on the air (or listens on it): the stated figure itself,
+    unchanged in type, when there is no offset."""
+    if freq is None or not ppm:
+        return freq
+    return freq * (1.0 + ppm * 1e-6)
+
+
 def same_carrier(freq_a, freq_b, bw_hz):
     """True when two stated frequencies are one carrier at this bandwidth."""
     if freq_a is None or freq_b is None:
@@ -1054,6 +1063,7 @@ class Frame:
         self.fid = fid          # the transmitter's, unique only to it
         self.sid = sid
         self.freq = msg.get("freq")
+        self.ppm = None         # its transmitter's carrier offset (`Ether.set_carriers`)
         self.bw = msg.get("bw")
         self.sf = msg.get("sf")
         self.sync = msg.get("sync")
@@ -1084,6 +1094,13 @@ class Frame:
         self.rice = {}          # rsid -> its fast fading there, dB (`Ether.rice_db`)
         self.key = None         # what its draws are keyed on (`Ether.key_of`)
 
+    @property
+    def carrier(self):
+        """Where its transmitter's radio really puts it: what carriers are
+        compared by. `freq`, the stated one, is what the record and the path
+        loss read."""
+        return offset_carrier(self.freq, self.ppm)
+
     def preamble_left(self, now):
         """True when a receiver that starts listening at `now` still has
         PREAMBLE_FOUND_SYMBOLS of this frame's preamble to find it by."""
@@ -1096,7 +1113,7 @@ class Frame:
 
     def shares_air(self, other):
         """True when the two frames overlap in band and in time."""
-        return (in_band(self.freq, self.bw, other.freq, other.bw)
+        return (in_band(self.carrier, self.bw, other.carrier, other.bw)
                 and self.start_us < other.end_us
                 and other.start_us < self.end_us)
 
@@ -1196,6 +1213,7 @@ class Ether(asyncio.DatagramProtocol):
         self.tables = {}            # band name -> slt.Table
         self.names = {}             # sid -> node name, the table's index
         self.chips = {}             # sid -> its radio's chip (`set_chips`), for physics v2
+        self.carrier_ppm = {}       # sid -> its radio's carrier offset (`set_carriers`)
         self.gains = {}             # sid -> antenna gain in dBi
         self.frames = []            # frames still in flight or just ended
         self.knots = {}             # (name, name, k) -> a fading knot (`fade_db`)
@@ -2177,6 +2195,7 @@ class Ether(asyncio.DatagramProtocol):
         self.next_eid += 1
         frame = Frame(self.next_eid, msg.get("id"), sid, msg, start, start + span,
                       start + pre, start + hdr)
+        frame.ppm = self.carrier_ppm.get(sid)
 
         self.prune(start)
         for other in [f for f in self.frames if f.shares_air(frame)]:
@@ -2212,10 +2231,13 @@ class Ether(asyncio.DatagramProtocol):
             ["%d@%.1fdBm" % (r[0], r[2]) for r in frame.receivers] or "nobody"))
 
     @staticmethod
-    def detector(state, tx):
+    def detector(state, tx, carriers=None):
         """Which of a receiver's detectors can decode this transmission: 0 its
-        main one, k the k-th of its `side` list, None none."""
-        if not same_carrier(state.get("freq"), tx.get("freq"), state.get("bw")):
+        main one, k the k-th of its `side` list, None none. `carriers`, the
+        receiver's and the transmitter's real carriers, when they are not
+        the stated ones (`Ether.set_carriers`)."""
+        heard, sent = carriers or (state.get("freq"), tx.get("freq"))
+        if not same_carrier(heard, sent, state.get("bw")):
             return None
         if all(state.get(k) == tx.get(k) for k in MATCH_KEYS):
             return 0
@@ -2271,7 +2293,8 @@ class Ether(asyncio.DatagramProtocol):
         for other in self.frames:
             if not other.start_us <= now < other.end_us or other.sid == rsid:
                 continue
-            if not in_band(other.freq, other.bw, state.get("freq"), state.get("bw")):
+            if not in_band(other.carrier, other.bw, self.carrier_of(rsid, state.get("freq")),
+                           state.get("bw")):
                 continue
             level = self.level_at(other, rsid, now)
             if level is not None:
@@ -2296,12 +2319,14 @@ class Ether(asyncio.DatagramProtocol):
         starting before then is energy to it, and lost.
         """
         state = rstation.state(slot)
-        if not in_band(frame.freq, frame.bw, state.get("freq"), state.get("bw")):
+        tuned = self.carrier_of(rstation.sid, state.get("freq"))
+        if not in_band(frame.carrier, frame.bw, tuned, state.get("bw")):
             return
         late = now is not None and now > frame.start_us
         now = frame.start_us if now is None else now
         faded = self.level_at(frame, rstation.sid, now)
-        det = self.detector(state, msg)
+        det = self.detector(state, msg, (self.carrier_of(rstation.sid, state.get("freq")),
+                                         frame.carrier))
         if det and rstation.sensing(slot):
             det = None          # a CAD is the main detector's alone
         if self.physics.v2 and rstation.sensing(slot):
@@ -2404,7 +2429,8 @@ class Ether(asyncio.DatagramProtocol):
         state = rstation.state(slot)
         late = now is not None and now > frame.start_us
         now = frame.start_us if now is None else now
-        det = self.detector(state, msg)
+        det = self.detector(state, msg, (self.carrier_of(rstation.sid, state.get("freq")),
+                                         frame.carrier))
         if det and rstation.sensing(slot):
             det = None          # a CAD is the main detector's alone
         if det is None or not self.locks_on(frame, rstation.sid, slot, now, det):
@@ -2557,6 +2583,20 @@ class Ether(asyncio.DatagramProtocol):
         named here is the default chip's."""
         self.chips = {int(sid): str(chip) for sid, chip in (chips_by_sid or {}).items()}
 
+    def set_carriers(self, ppm_by_sid):
+        """How far each station's radio puts its carrier off the stated one,
+        sid -> parts per million (its reference oscillator's error), from
+        whatever drives the run, as `set_chips`: never over the wire, so a
+        record is the same with or without it. A station not named here is
+        exact. Frames compare by their real carriers (`same_carrier`,
+        `in_band`), the record and the path loss keep the stated one."""
+        self.carrier_ppm = {int(sid): float(ppm) for sid, ppm in (ppm_by_sid or {}).items()
+                            if ppm}
+
+    def carrier_of(self, sid, freq):
+        """Where station `sid`'s radio really is when it states `freq`."""
+        return offset_carrier(freq, self.carrier_ppm.get(sid))
+
     def chip_of(self, rsid):
         """The chip a station's radio is (`set_chips`), for physics v2's tables."""
         return self.chips.get(rsid, DEFAULT_CHIP)
@@ -2676,7 +2716,8 @@ class Ether(asyncio.DatagramProtocol):
         follows share the one random number -- even where the two read it
         by different rules, as the bench's own CAD and decode odds also
         part ways once a frame is weak enough."""
-        if (not same_carrier(state.get("freq"), frame.freq, state.get("bw"))
+        if (not same_carrier(self.carrier_of(rstation.sid, state.get("freq")), frame.carrier,
+                             state.get("bw"))
                 or state.get("bw") != frame.bw):
             return False
         chip, slot_sf = self.chip_of(rstation.sid), state.get("sf")
@@ -2758,7 +2799,7 @@ class Ether(asyncio.DatagramProtocol):
         if not self.physics.interference:
             return "clean", None
         for other in frame.interferers:
-            if not same_carrier(frame.freq, other.freq, max(frame.bw or 0, other.bw or 0)):
+            if not same_carrier(frame.carrier, other.carrier, max(frame.bw or 0, other.bw or 0)):
                 continue
             if self.level_of(other, rsid) is None:
                 continue

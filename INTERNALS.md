@@ -1721,6 +1721,17 @@ per million, hashed from the seed and the node's name, so each station keeps
 its own time and keeps it again in a run with the same seed. A crystal is
 typically within ±20 ppm, 72 ms an hour. The radio's timers stay on T.
 
+**The radio has a reference of its own.** `simd --carrier-ppm P` puts each
+station's carrier off the frequency it states by another draw uniform within
+±P parts per million, keyed as the clock's but apart from it
+(`Ether.set_carriers`, told by direct call as the chips are). Frames are
+compared by their real carriers (`same_carrier`, `in_band`); the record and
+the path loss keep the stated one, so a run without the flag is recorded as
+before. Two radios are one carrier while their difference stays within a
+quarter of the bandwidth: two TCXOs at ±2 ppm are 3.5 kHz apart at 868 MHz and
+change nothing, two plain crystals at ±20 ppm are 34.7 kHz apart and do not
+hear each other at 125 kHz, nor sense each other at all at 31.25 kHz.
+
 **The C library's time is answered by a preloaded shim**,
 `radio/build/libsimclock.so` (built from `radio/shim/simclock.c`), which every
 station of a virtual run is started with (`LD_PRELOAD`, `SIM_MESH_TIME=virtual`,
