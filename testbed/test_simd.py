@@ -1013,3 +1013,30 @@ def test_a_backbone_has_a_table_of_its_own_in_the_run(stores, monkeypatch):
         assert sorted(daemon.tables) == ["433", "868"]
         daemon.ether.close()
     asyncio.run(go())
+
+
+def test_each_station_keeps_its_own_carrier_offset_within_the_ppm_given(stores):
+    """--carrier-ppm: a station's radio carrier is off by a draw within the
+    bound, its own, the same for the same seed and name, and apart from its
+    clock's draw; none at all without the flag."""
+    import types
+    daemon = make_simd(stores, "--time", "max", "--carrier-ppm", "20", "--clock-ppm", "20")
+    daemon.ether = types.SimpleNamespace(seed=5, clock=types.SimpleNamespace(virtual=True),
+                                         epoch=0)
+    offsets = {name: daemon.carrier_offset(name) for name in "abc"}
+    assert all(abs(ppm) <= 20 for ppm in offsets.values())
+    assert len({round(ppm, 6) for ppm in offsets.values()}) == 3
+    assert daemon.carrier_offset("a") == offsets["a"]
+    text = daemon.clock_profile("a")
+    t1, n1 = map(int, text.split(",")[1].split(":"))
+    assert round((n1 - t1) / t1 * 1e6, 3) != round(offsets["a"], 3)
+    daemon.args.carrier_ppm = 0
+    assert daemon.carrier_offset("a") == 0.0
+
+
+def test_a_carrier_offset_is_parts_per_million_within_reason():
+    with pytest.raises(SystemExit):
+        simd.parse_args(["--carrier-ppm", "-1"])
+    with pytest.raises(SystemExit):
+        simd.parse_args(["--carrier-ppm", "1001"])
+    assert simd.parse_args(["--carrier-ppm", "20"]).carrier_ppm == 20.0

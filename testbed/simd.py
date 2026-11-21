@@ -317,6 +317,7 @@ class Simd:
         self.physics_tables = (ether_module.read_physics_file(args.physics)
                                if getattr(args, "physics", None) else {})
         self.chips = {}     # node id -> its firmware's radio, for the ether (`make_station`)
+        self.carriers = {}  # node id -> its radio's carrier offset in ppm (`make_station`)
         self.run_base = args.run            # where new runs go: this, or this-2, …
         self.ether_addr = args.ether
         self.ether = None
@@ -454,6 +455,7 @@ class Simd:
             pairwise=self.args.pairwise, seed=self.args.seed, epoch=self.args.epoch,
             bench_capture=self.args.bench_capture)
         self.ether.set_chips(self.chips)
+        self.ether.set_carriers(self.carriers)
         self.ether.on_tx = self.ether_tx
         self.ether.on_rx = self.ether_rx
         self.ether.on_station = self.ether_station
@@ -682,7 +684,21 @@ class Simd:
         self.chips[int(node["id"])] = str(station.driver.firmware.get("radio") or "sx1262")
         if getattr(self, "ether", None) is not None:
             self.ether.set_chips(self.chips)
+            # Its radio's carrier offset, told the same way.
+            self.carriers[int(node["id"])] = self.carrier_offset(name)
+            self.ether.set_carriers(self.carriers)
         return station
+
+    def carrier_offset(self, name):
+        """A station's radio reference, off by a draw uniform within
+        ±`--carrier-ppm` parts per million, from the seed and its name: how
+        far its carrier sits off the stated one (`Ether.set_carriers`), 0.0
+        for an exact one. Apart from its MCU's crystal (`clock_profile`):
+        the radio has its own reference."""
+        if not self.args.carrier_ppm:
+            return 0.0
+        draw = ether_module.seeded_draw(self.ether.seed, name, "carrier")
+        return self.args.carrier_ppm * (2.0 * draw - 1.0)
 
     def clock_profile(self, name):
         """A station's crystal, off by a draw uniform within ±`--clock-ppm`
@@ -1980,6 +1996,8 @@ class Simd:
             medium["bench_capture"] = True
         if self.args.clock_ppm:
             medium["clock_ppm"] = self.args.clock_ppm
+        if self.args.carrier_ppm:
+            medium["carrier_ppm"] = self.args.carrier_ppm
         if getattr(self.args, "physics", None):
             medium["physics_file"] = os.path.basename(self.args.physics)
         run.set(physics=medium, seed=self.ether.seed)
@@ -2303,6 +2321,11 @@ def parse_args(argv):
                     help="in a virtual-time run, each station's crystal off by a draw "
                          "uniform within this many parts per million, from the seed "
                          "and its name (default 0: every clock true)")
+    ap.add_argument("--carrier-ppm", type=float, default=0.0, metavar="PPM",
+                    help="each station's radio carrier off its stated frequency by a "
+                         "draw uniform within this many parts per million, from the "
+                         "seed and its name: its reference oscillator's error (default "
+                         "0: every carrier exact)")
     ap.add_argument("--physics", metavar="FILE",
                     help="a physics file: the version of the radio model and its tables "
                          "per chip, as ether/physics-v2.yaml (default: none, the rules "
@@ -2368,6 +2391,8 @@ def parse_args(argv):
         ap.error(str(err))
     if not 0 <= args.clock_ppm <= 1000:
         ap.error("--clock-ppm is parts per million, 0 to 1000")
+    if not 0 <= args.carrier_ppm <= 1000:
+        ap.error("--carrier-ppm is parts per million, 0 to 1000")
     if args.clock_ppm and args.time == "real":
         ap.error("--clock-ppm needs virtual time: in real time a station's clock is the host's")
     args.run = os.path.abspath(args.run)
