@@ -317,6 +317,7 @@ class Simd:
         self.physics_tables = (ether_module.read_physics_file(args.physics)
                                if getattr(args, "physics", None) else {})
         self.chips = {}     # node id -> its firmware's radio, for the ether (`make_station`)
+        self.noise_rises = {}   # node id -> its place's measured noise rise, dB (the nodeset's noise_rise_db)
         self.run_base = args.run            # where new runs go: this, or this-2, …
         self.ether_addr = args.ether
         self.ether = None
@@ -454,6 +455,7 @@ class Simd:
             pairwise=self.args.pairwise, seed=self.args.seed, epoch=self.args.epoch,
             bench_capture=self.args.bench_capture)
         self.ether.set_chips(self.chips)
+        self.ether.set_noise_rises(self.noise_rises)
         self.ether.on_tx = self.ether_tx
         self.ether.on_rx = self.ether_rx
         self.ether.on_station = self.ether_station
@@ -675,13 +677,17 @@ class Simd:
         station.watchers = len(self.consoles.get(name, ()))
         station.board = boards_module.environment(
             node.get("max_dbm"),
-            ether_module.cad_false_busy_spec(self.physics_tables.get("chips")))
+            ether_module.cad_false_busy_spec(self.physics_tables.get("chips")),
+            node.get("noise_rise_db"))
         station.clock_profile = self.clock_profile(name)
         # Which chip its radio is (the firmware's node.yaml), told to the ether
         # by direct call as the loss table is: physics v2's tables are per chip.
         self.chips[int(node["id"])] = str(station.driver.firmware.get("radio") or "sx1262")
+        if node.get("noise_rise_db") is not None:
+            self.noise_rises[int(node["id"])] = float(node["noise_rise_db"])
         if getattr(self, "ether", None) is not None:
             self.ether.set_chips(self.chips)
+            self.ether.set_noise_rises(self.noise_rises)
         return station
 
     def clock_profile(self, name):

@@ -17,7 +17,10 @@
 A node is its position, its antenna's height above the ground under it and
 where that figure came from (`measured`, `roof`, `raster`, `assumed`), its
 maximum power (`max_dbm`, dBm at the antenna connector, 22 when absent and
-at most 27; above 22 the node has a front end, boards.py), its antenna
+at most 27; above 22 the node has a front end, boards.py), how far its
+place lifts its receiver's noise floor over its chip's own (`noise_rise_db`,
+measured, 0 dB or more; none when absent: a device beside it, its
+building), its antenna
 (antennas.py: a type of the catalogue, and a directional one's aim), and its
 tags. A node has no board: every node is the one board boards.py
 describes. Nothing in it is said to a station: scripts say everything, in
@@ -119,9 +122,11 @@ def blank():
 
 
 def node_record(node_id, lat, lon, height_m=DEFAULT_HEIGHT_M, height_from="assumed",
-                antenna=None, tags=(), max_dbm=None):
-    """One node, in the shape the file and every caller use: `max_dbm` is
-    there only when the node states one."""
+                antenna=None, tags=(), max_dbm=None, noise_rise_db=None):
+    """One node, in the shape the file and every caller use: `max_dbm` and
+    `noise_rise_db` are there only when the node states them. `noise_rise_db`
+    is how far the node's place lifts its receiver's noise floor over its
+    chip's own (a device beside it, its building): measured, never below 0."""
     out = {"id": int(node_id), "lat": float(lat), "lon": float(lon),
            "height_m": float(height_m), "height_from": str(height_from),
            "antenna": antennas_module.check(antenna, "a node"),
@@ -129,6 +134,12 @@ def node_record(node_id, lat, lon, height_m=DEFAULT_HEIGHT_M, height_from="assum
     max_dbm = boards_module.check(max_dbm, "a node")
     if max_dbm is not None:
         out["max_dbm"] = max_dbm
+    if noise_rise_db is not None:
+        rise = finite(noise_rise_db, "noise_rise_db", "a node")
+        if rise < 0:
+            raise store.StoreError("a node: noise_rise_db is a rise over its chip's floor, 0 dB "
+                                   "or more, not %r" % (noise_rise_db,))
+        out["noise_rise_db"] = rise
     return out
 
 
@@ -213,7 +224,7 @@ def parse(data, where):
             node_id, finite(lat, "lat", here), finite(lon, "lon", here),
             finite(node.get("height_m", DEFAULT_HEIGHT_M), "height_m", here), height_from,
             antennas_module.check(node.get("antenna"), here), check_tags(node.get("tags")),
-            boards_module.check(node.get("max_dbm"), here))
+            boards_module.check(node.get("max_dbm"), here), node.get("noise_rise_db"))
     offsets = data.get("offsets") or []
     if not isinstance(offsets, list):
         raise store.StoreError("%s: offsets is a list, each { between: [a, b], db, note? }"
@@ -328,6 +339,8 @@ def dump_node(name, node):
              "height_from: %s" % node["height_from"]]
     if node.get("max_dbm") is not None:
         parts.append("max_dbm: %s" % store.scalar(node["max_dbm"]))
+    if node.get("noise_rise_db") is not None:
+        parts.append("noise_rise_db: %s" % store.scalar(node["noise_rise_db"]))
     parts.append("antenna: %s" % dump_antenna(node["antenna"]))
     parts.append("tags: %s" % store.flow(node["tags"]))
     return "  %s: { %s }" % (store.name_scalar(name), ", ".join(parts))

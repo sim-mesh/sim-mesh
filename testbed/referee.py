@@ -286,7 +286,7 @@ class Air:
         return self.levels[key]
 
     def hears(self, rsid, frame):
-        return self.medium.audible(self.level(frame, rsid), frame.bw, frame.sf)
+        return self.medium.audible(self.level(frame, rsid), frame.bw, frame.sf, rsid)
 
 
 def shared_air(frames):
